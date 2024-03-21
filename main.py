@@ -25,7 +25,7 @@ class Agent:
         self.system_message = system_message
         self.model = model
 
-    def send_message(self, messages):
+    def send_message(self, messages, max_attempts=3):
         response = client.chat.completions.create(
             model=self.model,
             messages=[{"role": "system", "content": self.system_message}] + messages,
@@ -34,6 +34,7 @@ class Agent:
         )
 
         output = ""
+        attempts = 0
         for chunk in response:
             token = chunk.choices[0].delta.content
             if token is not None:
@@ -41,7 +42,10 @@ class Agent:
                 sys.stdout.write(token)
                 sys.stdout.flush()
             else:
-                break
+                attempts += 1
+                if attempts >= max_attempts:
+                    print(f"Error: Agent {self.name} did not provide a valid response after {max_attempts} attempts.")
+                    break
 
         return output
 
@@ -65,7 +69,7 @@ class Coordinator:
 
         "your prompt" is the prompt you want to send to the agent "refactor_suggestor" or "refactor_editor". Ask the agents to return JSON objects and nothing else, just like this.
         """}]
-        coordinator_output = self.coordinator_agent.send_message(messages)
+        coordinator_output = self.coordinator_agent.send_message(messages, max_attempts=5)
         if coordinator_output:
             try:
                 coordinator_response = json.loads(coordinator_output.split("```json")[1].split("```")[0])
