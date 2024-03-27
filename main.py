@@ -2,21 +2,14 @@
 import os
 from openai import OpenAI
 import json
+from git import GitCommandError, Repo
+import constants
+from utils import convert_files_dict, extract_codeblocks, get_file_contents, get_file_contents_and_copy, get_gitignore_files, get_user_prompt, select_files, validate_git_repo
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 from typing import List
 
 import sys
-
-
-def get_file_contents(file_paths):
-    file_contents = ""
-    for file_path in file_paths:
-        try:
-            with open(file_path, 'r') as file:
-                file_contents += f"File: `{file_path}`\n```\n{file.read()}\n```\n\n"
-        except Exception as e:
-            print(f"Error reading file {file_path}: {e}")
-    return file_contents
 
 
 class Agent:
@@ -25,20 +18,19 @@ class Agent:
         self.system_message = system_message
         self.model = model
 
-    def send_message(self, messages, max_attempts=3):
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "system", "content": self.system_message}] + messages,
-            temperature=0,
-            stream=True                                                                   # Add this line to enable streaming
-        )
+    def send_messages(self, messages, max_attempts=3):
+        response = client.chat.completions.create(model=self.model,
+                                                  messages=[{"role": "system", "content": self.system_message}] + messages,
+                                                  temperature=0.5,
+                                                  max_tokens=4096,
+                                                  stream=True)
 
-        output = ""
+        output = []
         attempts = 0
         for chunk in response:
             token = chunk.choices[0].delta.content
             if token is not None:
-                output += token
+                output.append(token)
                 sys.stdout.write(token)
                 sys.stdout.flush()
             else:
@@ -46,89 +38,114 @@ class Agent:
                 if attempts >= max_attempts:
                     print(f"Error: Agent {self.name} did not provide a valid response after {max_attempts} attempts.")
                     break
+        sys.stdout.write("\n")
+        output = "".join(output)
+        return output, extract_codeblocks(output)
 
-        return output
 
 class Coordinator:
-    def __init__(self, coordinator_agent: Agent, agents: List[Agent]):
+    def __init__(self, coordinator_agent: Agent, agents: List[Agent], directory_path):
         self.coordinator_agent = coordinator_agent
         self.agents = agents
+        self.repo = Repo(directory_path)
+        self.branch = self.repo.create_head('refactoring')
 
-    def run(self, user_input):
-        messages = [{"role": "system", "content": self.coordinator_agent.system_message}, {"role": "user", "content": user_input + "\nPlease, return ONLY a JSON object like this:"+
-        """
-        {
-            "files": [
-                "file1.py",
-                "file2.py",
-                ...
-            ],
-            "agent": "refactor_suggestor or refactor_editor",
-            "prompt": "your prompt"
-        }
+    def apply_patch(self, patch):
+        try:
+            self.repo.git.apply(patch)
+            self.repo.git.add(update=True)
+            self.repo.index.commit("Apply patch", parent_commits=(self.branch.commit,))
+            return True
+        except GitCommandError as e:
+            print(f"Error applying patch: {e}")
+            self.repo.git.reset('--hard')
+            return False
 
-        "your prompt" is the prompt you want to send to the agent "refactor_suggestor" or "refactor_editor". Ask the agents to return JSON objects and nothing else, just like this.
-        """}]
-        coordinator_output = self.coordinator_agent.send_message(messages, max_attempts=5)
-        if coordinator_output:
+    def finalize(self):
+        self.branch.checkout()
+        self.repo.git.merge('refactoring')
+
+    def run(self, file_paths, user_prompt):
+        while True:
+            file_contents, file_paths = get_file_contents(file_paths)
+            user_input = file_contents + "\n\n" + user_prompt
+
+            # Step 1: Coordinator Agent
+            coordinator_message = {"role": "user", "content": user_input}
+            text, codeblocks = self.coordinator_agent.send_messages([coordinator_message])
+
             try:
-                coordinator_response = json.loads(coordinator_output.split("```json")[1].split("```")[0])
+                response = json.loads(codeblocks[0]["content"])
+                relevant_files, relevant_file_paths = get_file_contents(response["files"])
             except json.JSONDecodeError:
-                print(f"Error: The coordinator agent did not return a valid JSON object: {coordinator_output}")
+                print(f"Error: The coordinator agent did not return a valid JSON object: {response}")
                 return
 
-            # 2. Present the source code in language format to the `refactor_suggestor`, whom will reply with required refactoring task that needs to be performed.
+
+            # Step 2: Suggestor Agent
             suggestor_agent = self.agents[0]
-            suggestor_messages = messages + [{"role": "user", "content": coordinator_response["prompt"]}]
-            suggestor_output = suggestor_agent.send_message(suggestor_messages)
-            tasks = [suggestor_output]
-            messages.append({"role": "assistant", "content": suggestor_output})
+            suggestor_message = {"role": "user", "content": json.dumps(relevant_files)}
+            text, codeblocks = suggestor_agent.send_messages([suggestor_message])
 
-            while tasks:
-                # 3. For each task, present the latest version of the code alongside the task to the `refactor_editor` assistant. The assistant will create .patch files to be applied on top of the input files.
-                task = tasks.pop(0)
-                editor_agent = self.agents[1]
-                editor_messages = messages + [{"role": "user", "content": task}]
-                editor_output = editor_agent.send_message(editor_messages)
-                messages.append({"role": "assistant", "content": editor_output})
+            try:
+                tasks = json.loads(codeblocks[0]["content"])["tasks"]
+            except json.JSONDecodeError:
+                print(f"Error: The suggestor agent did not return a valid JSON object: {text}")
+                return
 
-                # # 4. Ask `refactor_runner` to execute the required shell commands (using `sh` codeblocks) that will apply the patches on top of the source code file(s). `refactor_runner` might require several consecutive runs. If it reaches 10 or replies with CONTINUE, it means it's job is done and you can proceed to step 4. If it replies with TERMINATE, stop everything.
-                # runner_messages = messages + [{"role": "user", "content": "Please apply the patch files created by the refactor_editor and update the source code files."}]
-                # runner_output = runner_agent.send_message(runner_messages)
-                # messages.append({"role": "assistant", "content": runner_output})
+            editor_agent = self.agents[1]
+            for task in tasks:
+                editor_messages = []
 
-                # if runner_output == "TERMINATE":
-                #     break
-                # elif runner_output != "CONTINUE":
-                    # 5. Repeat steps 2-4 until `refactor_suggestor` doesn't have any more tasks
-                suggestor_messages = messages + [{"role": "user", "content": "Please suggest the next refactoring task for the updated code."}]
-                suggestor_output = suggestor_agent.send_message(suggestor_messages)
-                if suggestor_output:
-                    tasks.append(suggestor_output)
-                    messages.append({"role": "assistant", "content": suggestor_output})
+                prompt = task["prompt"]
+                files_contents, file_paths = get_file_contents(task["files"])
+                user_input = files_contents + "\n\n" + prompt
 
-        return "\n".join(m["content"] for m in messages if m["role"] == "assistant")
+                editor_messages.append({"role": "user", "content": user_input})
+                text, codeblocks = editor_agent.send_messages(editor_messages)
+
+                # Apply each patch individually
+                for patch in codeblocks:
+                    success = False
+                    attempts = 0
+                    while not success and attempts < 3:
+                        try:
+                            print(f"Applying patch: {patch['language']}: {patch['content']}")
+                            self.apply_patch(patch["content"])
+                            success = True
+                        except Exception as e:
+                            attempts += 1
+                            if attempts == 3:
+                                print(f"Failed to apply patch after 3 attempts: {e}")
+                            else:
+                                print(f"Error applying patch, attempt {attempts}. Asking the editor for a new patch.")
+                                editor_messages.append({"role": "user", "content": f"Patch:\n{patch}\n\nError:{e}\nYour patch failed to apply. Please provide a new patch."})
+                                text, codeblocks = editor_agent.send_messages(editor_messages)
+                                for patch in codeblocks:
+                                    self.apply_patch(patch["content"])
+
+def main():
+    directory_path = sys.argv[1]
+    if not os.path.exists(directory_path):
+        print(f"Error: {directory_path} does not exist.")
+        sys.exit(1)
+    validate_git_repo(directory_path)
+    ignored_files = get_gitignore_files(directory_path)
+    file_paths = [
+        os.path.join(directory_path, file)
+        for file in os.listdir(directory_path)
+        if os.path.isfile(os.path.join(directory_path, file)) and os.path.join(directory_path, file) not in ignored_files]
+    prompt = get_user_prompt()
+
+    agent_coordinator = Agent(system_message=constants.SYSTEM_MESSAGES["agent_coordinator"], name="agent_coordinator")
+    agent_suggestor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_suggestor"], name="agent_suggestor")
+    agent_editor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_editor"], name="agent_editor")
+    coordinator = Coordinator(agent_coordinator, agents=[agent_suggestor, agent_editor], directory_path=directory_path)
+
+    coordinator.run(file_paths, prompt)
+
+    print("The refactoring was successful. The source code files have been updated with the patches.")
 
 
 if __name__ == "__main__":
-    # Check if at least one file path is provided
-    if len(sys.argv) < 2:
-        print("Usage: python script.py <file1> <file2> ... <fileN>")
-        sys.exit(1)
-
-    # Get the list of file paths from the command line arguments
-    file_paths = sys.argv[1:]
-
-    refactor_coordinator = Agent(system_message="As the coordinator, your role is to manage the workflow between the agents `refactor_suggestor` and `refactor_editor`. Ensure the code provided by the user is refactored according to best practices. Coordinate the agents to perform their tasks sequentially and track their progress.\n\nWorkflow steps:\n1. If the user provides file paths, read and present the code to `refactor_suggestor`.\n2. `refactor_suggestor` will analyze the code and suggest a specific refactoring task.\n3. Pass the task and code to `refactor_editor` to create patch files for the suggested refactoring.\n4. Apply the patches to the source code files.\n5. Repeat steps 2-4 until no further refactoring tasks are suggested.",
-                            name="refactor_coordinator")
-    refactor_suggestor = Agent(system_message="Your role is to identify and suggest specific refactoring tasks for the provided code. Focus on structural improvements that enhance readability, adhere to best practices, and optimize performance. Provide one task at a time, targeting significant changes rather than minor edits. Avoid abstract instructions; be precise and actionable.\n\nExample:\nInput: [code snippet]\nOutput: - Refactor `processData` to use a generator for memory efficiency.\n\nProvide only the task in your response for clear parsing. Do not attempt to run code or work with hypothetical scenarios. Prioritize tasks with the most impact, such as creating new files or restructuring large code blocks.\n",
-                               name="refactor_suggestor")
-    refactor_editor = Agent(system_message="Your responsibility is to create patch files based on the refactoring tasks provided. Ensure the patches are concise and apply cleanly to the input code. Use shell commands to save the patch files. Do not summarize or omit important code sections; split them into separate patches if necessary. If input files are missing, create them first. Focus on accuracy and avoid hypothetical code scenarios.\n",
-                            name="refactor_editor")
-
-    coordinator = Coordinator(refactor_coordinator, agents=[refactor_suggestor, refactor_editor])
-
-    file_contents = get_file_contents(file_paths)
-    prompt = input("Enter a prompt to use for the refactoring: ")
-    output = coordinator.run(file_contents + f"\n\n{prompt}")
-    print(output)
+    main()
