@@ -53,25 +53,6 @@ def get_file_contents_and_copy(file_paths):
     return file_contents, file_paths_new
 
 
-def get_file_contents(file_paths):
-    file_contents = ""
-    for file_path in file_paths:
-        try:
-            # Check if the file path is in the cache
-            if file_path in file_cache:
-                absolute_path = file_cache[file_path]
-            else:
-                # Convert the file path to an absolute path and add it to the cache
-                absolute_path = os.path.abspath(file_path)
-                file_cache[file_path] = absolute_path
-
-            with open(absolute_path, 'r') as file:
-                file_contents += f"Path: {absolute_path}\n```{os.path.basename(absolute_path).split('.')[1]}\n{file.read()}\n```\n"
-        except Exception as e:
-            print(f"Error reading file {absolute_path}: {e}")
-    return file_contents, file_paths
-
-
 def get_gitignore_files(directory_path):
     with open(os.path.join(directory_path, '.gitignore'), 'r') as f:
         gitignore = f.read()
