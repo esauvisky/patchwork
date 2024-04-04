@@ -5,3 +5,4 @@ loguru==0.7.2
 aiohttp==3.9.3
 GitPython==3.1.42
 pathspec==0.12.1
+inquirerpy==0.3.4
