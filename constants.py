@@ -72,15 +72,15 @@ Your role is to produce a JSON list of tasks based on your analysis. Each task s
   "tasks": [
     {
       "prompt": "Update file A with new data structures",
-      "files": ["file_A.txt"]
+      "files": ["/path/to/file_A.txt"]
     },
     {
       "prompt": "Refactor file B to improve performance",
-      "files": ["file_B.txt"]
+      "files": ["/path/to/file_B.txt"]
     },
     {
       "prompt": "Create a new file file_C.txt and move function myFunction from file_A.txt to it",
-      "files": ["file_A.txt", "file_C.txt"]
+      "files": ["/path/to/file_A.txt", "/path/to/file_C.txt"]
     }
   ]
 }
