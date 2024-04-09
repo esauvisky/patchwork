@@ -106,34 +106,6 @@ class Coordinator:
                 logger.error(f"Error reading file {file_path}: {e}")
         return file_contents, file_paths
 
-    # def apply_patch(self, patch):
-    #     # replace line numbers with '@@ -,0 @@'
-    #     patch = re.sub(r'\n@@ .+ @@', '\n@@ -,0 @@', patch, re.MULTILINE)
-    #     patch_set = PatchSet.from_string(patch)
-
-    #     for patched_file in patch_set:
-    #         file_path = "/" + patched_file.path
-    #         try:
-    #             # create if it doesn't exist
-    #             if not os.path.exists(file_path):
-    #                 with open(file_path, 'w') as file:
-    #                     file.write("")
-    #             with open(file_path, 'r+') as file:
-    #                 lines = file.readlines()
-    #                 for hunk in patched_file:
-    #                     for line in hunk:
-    #                         if line.is_added:
-    #                             lines.insert(line.target_line_no - 1, line.value)
-    #                         elif line.is_removed:
-    #                             del lines[line.source_line_no - 1]
-    #                 file.seek(0)
-    #                 file.writelines(lines)
-    #         except Exception as e:
-    #             logger.error(f"Error applying patch to file {file_path}: {e}")
-    #             return False
-
-    #     return True
-
     def finalize(self):
         pass
         # self.branch.checkout()
@@ -196,6 +168,8 @@ class Coordinator:
             for ix, raw_patch in enumerate(patches):
                 success = False
                 patch = raw_patch + "\n"
+                # remove repo dir from a/ and b/ paths
+                patch = re.sub(r"([ab]/)" + self.repo.working_dir, "", patch, re.MULTILINE)
                 with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
                     temp_file.write(patch)
                     temp_file_name = temp_file.name
@@ -216,7 +190,6 @@ class Coordinator:
                                             recount=True,
                                             verbose=True,
                                             ignore_space_change=True,
-                                            intent_to_add=True,
                                             whitespace="fix",
                                             allow_overlap=True,
                                             ignore_space=True,
