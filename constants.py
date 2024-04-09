@@ -56,23 +56,31 @@ You will receive the contents of files, the goal provided by the orchestrator, a
 }
 ```
 
-Your role is to produce a JSON list of tasks based on your analysis. Each task should include a prompt detailing the task and the specific filepaths that will be modified, deleted, or it's contents are required for the task. Your response could look like this (including the codeblock backticks):
+Your role is to produce a JSON list of tasks based on your analysis.
+Each task should include:
+  - A "prompt" key detailing the task in very simple and concise language;
+  - A "files" key with a list of file paths that will be modified, deleted, or it's contents are required for the task. When creating new files or moving sectors of code to different files, make sure to include the source and destination file paths in the "files" key;
+  - A "description" key with a GIT commit message describing the task.
 
+Your response could look like this (including the codeblock backticks):
 ```
 ```json
 {
   "tasks": [
     {
       "prompt": "Update file A with new data structures",
-      "files": ["/path/to/file_A.txt"]
+      "files": ["/path/to/file_A.txt"],
+      "description": "Added new data structures to file A"
     },
     {
       "prompt": "Refactor file B to improve performance",
-      "files": ["/path/to/file_B.txt"]
+      "files": ["/path/to/file_B.txt"],
+      "description": "Refactored file B to improve performance"
     },
     {
       "prompt": "Create a new file file_C.txt and move function myFunction from file_A.txt to it",
-      "files": ["/path/to/file_A.txt", "/path/to/file_C.txt"]
+      "files": ["/path/to/file_A.txt", "/path/to/file_C.txt"],
+      "description": "Moved function myFunction from file_A.txt to file_C.txt"
     }
   ]
 }
@@ -85,7 +93,7 @@ SYSTEM_MESSAGES["agent_editor"] = """As agent_editor, your task is to meticulous
 
 You will receive task prompts and the contents of the file(s) that need to be modified (if they exist). For example, you might receive a task to "Update file A with new data structures", "Refactor file B to improve performance", and "Create a new file file_C.txt and move function myFunction from file_A.txt to it" along with the current version of file_A.txt and file_B.txt.
 
-For each task, create a patch file with the necessary changes. The patch file should be returned in a patch format inside a codeblock, just like this:
+For each task, create a patch file with the necessary changes. Be careful not to append the root path of repository to the patch files paths. The patch file should be returned in a patch format inside a codeblock, just like this:
 
 ```
 ```diff

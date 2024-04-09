@@ -80,7 +80,7 @@ class Coordinator:
         self.suggestor_agent = agents[0]
         self.editor_agent = agents[1]
         self.repo = Repo(directory_path)
-        self.branch = self.repo.create_head('refactoring')
+        # self.branch = self.repo.create_head('refactoring')
 
     def get_file_contents(self, file_paths):
         file_contents = ""
@@ -135,8 +135,9 @@ class Coordinator:
     #     return True
 
     def finalize(self):
-        self.branch.checkout()
-        self.repo.git.merge('refactoring')
+        pass
+        # self.branch.checkout()
+        # self.repo.git.merge('refactoring')
 
     def run(self, file_paths, user_prompt):
         file_contents, file_paths = self.get_file_contents(file_paths)
@@ -178,6 +179,7 @@ class Coordinator:
             editor_messages = []
 
             prompt = task["prompt"]
+            description = task["description"]
             files_contents, file_paths = self.get_file_contents(task["files"])
             user_input = files_contents + "\n\n" + prompt
 
@@ -193,41 +195,48 @@ class Coordinator:
 
             for ix, raw_patch in enumerate(patches):
                 success = False
-                patch = raw_patch
+                patch = raw_patch + "\n"
+                with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+                    temp_file.write(patch)
+                    temp_file_name = temp_file.name
                 while not success:
                     try:
                         logger.info(f"Applying patch #{ix}")
-                        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
-                            temp_file.write(patch)
-                            temp_file_name = temp_file.name
+                        # # Construct the patch command
+                        # # Assuming the working directory is where you want the patch applied
+                        # patch_command = ["patch", "-E", "--merge", "--verbose", "l", "-F5", "-i", temp_file_name]
 
-                        # Construct the patch command
-                        # Assuming the working directory is where you want the patch applied
-                        patch_command = ["patch", "-E", "--merge", "--verbose", "l", "-F5", "-i", temp_file_name]
-
-                        # Execute the patch command
-                        subprocess.run(patch_command, check=True, cwd=self.repo.working_dir)
-                        logger.info(f"Patch #{ix} applied successfully.")
-                        # self.repo.git.apply(temp_file_name,
-                        #                     recount=True,
-                        #                     allow_overlap=True,
-                        #                     ignore_space=True,
-                        #                     inaccurate_eof=True)
-                        # self.repo.git.add(update=True)
-                        # self.repo.index.commit(message, parent_commits=(self.branch.commit,))
+                        # # Execute the patch command
+                        # subproc = subprocess.run(patch_command, check=True, cwd=self.repo.working_dir)
+                        # logger.info(f"Patch #{ix} applied successfully.")
+                        # success = subproc.returncode == 0
+                        # if not success:
+                        #     raise Exception(f"Patch #{ix} failed to apply. Error: {subproc.stderr}")
+                        self.repo.git.apply(temp_file_name,
+                                            recount=True,
+                                            verbose=True,
+                                            ignore_space_change=True,
+                                            intent_to_add=True,
+                                            whitespace="fix",
+                                            allow_overlap=True,
+                                            ignore_space=True,
+                                            inaccurate_eof=True)
+                        self.repo.git.add(update=True)
+                        self.repo.index.commit(description, parent_commits=(self.repo.active_branch.commit,))
+                        success = True
                     except Exception as e:
                         logger.error(f"Failed to apply patch #{ix}:\n{e}")
                         logger.warning("What do you want to do with the patch file?")
                         action = inquirer.select("action", choices=["Edit", "Retry", "Skip"]).execute()
                         if action == "Edit":
                             # open with xdg-open and wait for user input
-                            temp_file=tempfile.NamedTemporaryFile(mode='w+', delete=False)
-                            temp_file.write(raw_patch)
-                            temp_file.flush()
+                            # temp_file=tempfile.NamedTemporaryFile(mode='w+', delete=False)
+                            # temp_file.write(raw_patch)
+                            # temp_file.flush()
                             subprocess.run(["xdg-open", temp_file.name])
                             input("Press enter to continue...")
-                            patch = temp_file.read()
-                            temp_file.close()
+                            with open(temp_file_name, "r") as f:
+                                patch = f.read()
                             continue
                         elif action == "Retry":
                             with open(temp_file_name, "r") as f:
