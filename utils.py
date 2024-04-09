@@ -4,6 +4,8 @@ import os
 from git import Repo, InvalidGitRepositoryError
 import shutil
 import pathspec
+from InquirerPy import inquirer
+from InquirerPy.validator import PathValidator
 
 file_cache = {}
 
@@ -76,3 +78,33 @@ def extract_codeblocks(text):
 
     # Return a list of codeblocks objects, each with the content and language
     return [{"content": codeblock, "language": language} for language, codeblock in codeblocks]
+
+def select_options(options):
+    """
+    Allows the user to interactively select from a list of options.
+
+    :param options: List of options available for selection.
+    :return: A list of selected indices.
+    """
+    choices = [{"name": option, "value": idx} for idx, option in enumerate(options)]
+    selected_indices = inquirer.checkbox(
+        message="Select options:",
+        choices=choices,
+        validate=lambda result: len(result) > 0,
+        invalid_message="You must select at least one option.",
+    ).execute()
+    return selected_indices
+
+def select_user_files(all_files):
+    """
+    :param all_files: List of all file paths available for selection.
+    :return: A list of selected file paths.
+    """
+    choices = [{"name": file, "value": file} for file in all_files]
+    selected_files = inquirer.checkbox(
+        message="Select files or directories:",
+        choices=choices,
+        validate=lambda result: len(result) > 0,
+        invalid_message="You must select at least one file.",
+    ).execute()
+    return selected_files

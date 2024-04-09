@@ -2,6 +2,7 @@
 from InquirerPy import inquirer
 from InquirerPy.validator import PathValidator
 import tempfile
+import subprocess
 import io
 import os
 import re
@@ -10,7 +11,7 @@ import json
 from unidiff import PatchSet
 from git import GitCommandError, Repo
 import constants
-from utils import convert_files_dict, extract_codeblocks, get_gitignore_files, get_user_prompt, select_files, validate_git_repo
+from utils import convert_files_dict, extract_codeblocks, get_gitignore_files, get_user_prompt, select_files, select_options, select_user_files, validate_git_repo
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 from typing import List
@@ -51,7 +52,7 @@ class Agent:
     def send_messages(self, messages, max_attempts=3):
         response = client.chat.completions.create(model=self.model,
                                                   messages=[{"role": "system", "content": self.system_message}] + messages,
-                                                  temperature=0.5,
+                                                  temperature=1,
                                                   max_tokens=4096,
                                                   stream=True)
 
@@ -76,7 +77,8 @@ class Agent:
 class Coordinator:
     def __init__(self, coordinator_agent: Agent, agents: List[Agent], directory_path: str):
         self.coordinator_agent = coordinator_agent
-        self.agents = agents
+        self.suggestor_agent = agents[0]
+        self.editor_agent = agents[1]
         self.repo = Repo(directory_path)
         self.branch = self.repo.create_head('refactoring')
 
@@ -97,6 +99,7 @@ class Coordinator:
                     #     file.write("")
                 with open(absolute_path, 'r') as file:
                     file_contents += f"Path: {absolute_path}\n```{os.path.basename(absolute_path).split('.')[0] if len(os.path.basename(absolute_path).split('.')) == 1 else os.path.basename(absolute_path).split('.')[1]}\n{file.read()}\n```\n"
+                logger.info(f"Found file: {absolute_path}. File size: {os.path.getsize(absolute_path)} bytes.")
             except Exception as e:
                 logger.error(f"Error reading file {file_path}: {e}")
         return file_contents, file_paths
@@ -131,117 +134,117 @@ class Coordinator:
 
     def apply_patch(self, patch):
         try:
-            # extract first line into message
-            message = patch.split("\n")[0]
-            # remove first line
-            patch = "\n".join(patch.split("\n")[1:])
-            # replace working_dir
-            patch = patch.replace(self.repo.working_dir, "")
-            with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
-                temp_file.write(patch)
-                temp_file_name = temp_file.name
-            self.repo.git.apply(temp_file_name,
-                                recount=True,
-                                allow_overlap=True,
-                                ignore_space=True,
-                                inaccurate_eof=True)
-            os.remove(temp_file_name)
-            self.repo.git.add(update=True)
-            self.repo.index.commit(message, parent_commits=(self.branch.commit,))
             return True
         except GitCommandError as e:
             logger.error(f"Error applying patch: {e}")
             self.repo.git.reset('--hard')
             return False
+        finally:
+            os.remove(temp_file_name)
 
     def finalize(self):
         self.branch.checkout()
         self.repo.git.merge('refactoring')
 
     def run(self, file_paths, user_prompt):
-        while True:
-            file_contents, file_paths = self.get_file_contents(file_paths)
-            user_input = file_contents + "\n\n" + user_prompt
+        file_contents, file_paths = self.get_file_contents(file_paths)
+        user_input = file_contents + "\n\n" + user_prompt
 
-            # Step 1: Coordinator Agent
-            coordinator_message = {"role": "user", "content": user_input}
-            text, codeblocks = self.coordinator_agent.send_messages([coordinator_message])
+        # Step 1: Coordinator Agent
+        coordinator_message = {"role": "user", "content": user_input}
+        text, codeblocks = self.coordinator_agent.send_messages([coordinator_message])
 
-            try:
-                response = json.loads(codeblocks[0]["content"])
-                relevant_files, relevant_file_paths = self.get_file_contents(response["files"])
-            except json.JSONDecodeError:
-                logger.error(f"Error: The coordinator agent did not return a valid JSON object: {response}")
-                return
+        try:
+            response = json.loads(codeblocks[0]["content"])
+            relevant_files, relevant_file_paths = self.get_file_contents(response["files"])
+        except json.JSONDecodeError:
+            logger.error(f"Error: The coordinator agent did not return a valid JSON object: {response}")
+            return
 
-            # Step 2: Suggestor Agent
-            suggestor_agent = self.agents[0]
-            suggestor_message_directive = {"role": "user", "content": f"Use the following prompt as a directive for guidance on the intended goal of the refactoring process:\n\n{user_prompt}\n\n"}
-            suggestor_message_contents = {"role": "user", "content": json.dumps(relevant_files)}
-            text, codeblocks = suggestor_agent.send_messages([suggestor_message_directive, suggestor_message_contents])
+        # Step 2: Suggestor Agent
+        suggestor_message_directive = {"role": "user", "content": f"Use the following prompt as a directive for guidance on the intended goal of the refactoring process:\n\n{user_prompt}\n\n"}
+        suggestor_message_contents = {"role": "user", "content": json.dumps(relevant_files)}
+        text, codeblocks = self.suggestor_agent.send_messages([suggestor_message_directive, suggestor_message_contents])
+        # After receiving tasks from the suggestor agent
+        try:
+            tasks = json.loads(codeblocks[0]["content"])["tasks"]
+            tasks_descriptions = [task["prompt"] for task in tasks]  # Assuming each task has a 'description' field
+        except json.JSONDecodeError:
+            logger.error(f"Error: The suggestor agent did not return a valid JSON object: {text}")
+            return
 
-            try:
-                tasks = json.loads(codeblocks[0]["content"])["tasks"]
-            except json.JSONDecodeError:
-                logger.error(f"Error: The suggestor agent did not return a valid JSON object: {text}")
-                return
+        # Present tasks to the user for selection
+        print("Please select the refactoring tasks you want to proceed with:")
+        selected_tasks_indices = select_options(tasks_descriptions)
 
-            editor_agent = self.agents[1]
-            for task in tasks:
-                editor_messages = []
+        # Filter tasks based on user selection
+        selected_tasks = [tasks[i] for i in selected_tasks_indices]
 
-                prompt = task["prompt"]
-                files_contents, file_paths = self.get_file_contents(task["files"])
-                user_input = files_contents + "\n\n" + prompt
+        # Proceed with only the selected tasks
+        for task in selected_tasks:
+            editor_messages = []
 
-                editor_messages.append({"role": "user", "content": user_input})
-                text, codeblocks = editor_agent.send_messages(editor_messages)
+            prompt = task["prompt"]
+            files_contents, file_paths = self.get_file_contents(task["files"])
+            user_input = files_contents + "\n\n" + prompt
 
-                # Apply each patch individually
-                patches = [
-                    codeblock["content"]
-                    for codeblock in codeblocks
-                    if codeblock["language"] == "patch" or codeblock["language"] == "diff"]
-                logger.info(f"Applying {len(patches)} patches")
+            editor_messages.append({"role": "user", "content": user_input})
+            text, codeblocks = self.editor_agent.send_messages(editor_messages)
 
-                for ix, patch in enumerate(patches):
-                    success = False
-                    attempts = 0
-                    while not success and attempts < 3:
-                        try:
-                            logger.info(f"Applying patch #{ix} (Attempt {attempts + 1})")
-                            self.apply_patch(patch)
+            # Apply each patch individually
+            patches = [
+                codeblock["content"]
+                for codeblock in codeblocks
+                if codeblock["language"] == "patch" or codeblock["language"] == "diff"]
+            logger.info(f"Applying {len(patches)} patches")
+
+            for ix, patch in enumerate(patches):
+                success = False
+                while not success:
+                    try:
+                        logger.info(f"Applying patch #{ix}")
+                        # extract first line into message
+                        message = patch.split("\n")[0]
+                        # remove first line
+                        patch = "\n".join(patch.split("\n")[1:])
+                        # replace working_dir
+                        patch = patch.replace(self.repo.working_dir, "")
+                        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+                            temp_file.write(patch)
+                            temp_file_name = temp_file.name
+                        self.repo.git.apply(temp_file_name,
+                                            recount=True,
+                                            allow_overlap=True,
+                                            ignore_space=True,
+                                            inaccurate_eof=True)
+                        self.repo.git.add(update=True)
+                        self.repo.index.commit(message, parent_commits=(self.branch.commit,))
+                    except Exception as e:
+                        logger.info(f"Failed to apply patch #{ix}:\n{e}")
+                        logger.warning("What do you want to do with the patch file?")
+                        inquirer.select("action", choices=["Edit", "Retry", "Skip"])
+                        action = inquirer.get("action")
+                        if action == "Edit":
+                            # open with xdg-open and wait for user input
+                            subprocess.run(["xdg-open", temp_file_name])
+                            with open(temp_file_name, "r") as f:
+                                patch = f.read()
+                            # wait for user input
+                            inquirer.wait_for_enter()
+                            continue
+                        elif action == "Retry":
+                            with open(temp_file_name, "r") as f:
+                                patch = f.read()
+                            editor_messages.append({
+                                "role": "user", "content": f"Patch:\n{patch}\n\nError:{e}\nYour patch failed to apply. Please provide a new patch."})
+                            text, codeblocks = self.editor_agent.send_messages(editor_messages)
+                            patch = next(codeblock["content"]
+                                         for codeblock in codeblocks
+                                         if codeblock["language"] == "patch" or codeblock["language"] == "diff")
+                            continue
+                        elif action == "Skip":
                             success = True
-                        except Exception as e:
-                            attempts += 1
-                            if attempts == 3:
-                                logger.info(f"Failed to apply patch after 3 attempts: {e}")
-                            else:
-                                logger.error(f"{e}\nError applying patch, attempt {attempts}. Asking the editor for a new patch.",
-                                             exc_info=True)
-                                editor_messages.append({
-                                    "role": "user", "content": f"Patch:\n{patch}\n\nError:{e}\nYour patch failed to apply. Please provide a new patch."})
-                                text, codeblocks = editor_agent.send_messages(editor_messages)
-                                patch = next(codeblock["content"]
-                                             for codeblock in codeblocks
-                                             if codeblock["language"] == "patch" or codeblock["language"] == "diff")
-
-
-def select_user_files(all_files):
-    """
-    Uses InquirerPy to let the user interactively select files or directories for processing.
-
-    :param all_files: List of all file paths available for selection.
-    :return: A list of selected file paths.
-    """
-    choices = [{"name": file, "value": file} for file in all_files]
-    selected_files = inquirer.checkbox(
-        message="Select files or directories:",
-        choices=choices,
-        validate=lambda result: len(result) > 0,
-        invalid_message="You must select at least one file.",
-    ).execute()
-    return selected_files
+                            continue
 
 
 def main():
