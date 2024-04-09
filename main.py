@@ -132,16 +132,6 @@ class Coordinator:
 
     #     return True
 
-    def apply_patch(self, patch):
-        try:
-            return True
-        except GitCommandError as e:
-            logger.error(f"Error applying patch: {e}")
-            self.repo.git.reset('--hard')
-            return False
-        finally:
-            os.remove(temp_file_name)
-
     def finalize(self):
         self.branch.checkout()
         self.repo.git.merge('refactoring')
@@ -196,17 +186,18 @@ class Coordinator:
                 codeblock["content"]
                 for codeblock in codeblocks
                 if codeblock["language"] == "patch" or codeblock["language"] == "diff"]
-            logger.info(f"Applying {len(patches)} patches")
+            logger.info(f"{len(patches)} patches for this task")
 
-            for ix, patch in enumerate(patches):
+            for ix, raw_patch in enumerate(patches):
                 success = False
+                patch = raw_patch
                 while not success:
                     try:
                         logger.info(f"Applying patch #{ix}")
                         # extract first line into message
                         message = patch.split("\n")[0]
                         # remove first line
-                        patch = "\n".join(patch.split("\n")[1:])
+                        patch = "\n".join(raw_patch.split("\n")[1:])
                         # replace working_dir
                         patch = patch.replace(self.repo.working_dir, "")
                         with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
@@ -220,17 +211,16 @@ class Coordinator:
                         self.repo.git.add(update=True)
                         self.repo.index.commit(message, parent_commits=(self.branch.commit,))
                     except Exception as e:
-                        logger.info(f"Failed to apply patch #{ix}:\n{e}")
+                        logger.error(f"Failed to apply patch #{ix}:\n{e}")
                         logger.warning("What do you want to do with the patch file?")
-                        inquirer.select("action", choices=["Edit", "Retry", "Skip"])
-                        action = inquirer.get("action")
+                        action = inquirer.select("action", choices=["Edit", "Retry", "Skip"]).execute()
                         if action == "Edit":
                             # open with xdg-open and wait for user input
-                            subprocess.run(["xdg-open", temp_file_name])
-                            with open(temp_file_name, "r") as f:
-                                patch = f.read()
-                            # wait for user input
-                            inquirer.wait_for_enter()
+                            with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+                                temp_file.write(raw_patch)
+                                subprocess.run(["xdg-open", temp_file.name])
+                                input("Press enter to continue...")
+                                patch = temp_file.read()
                             continue
                         elif action == "Retry":
                             with open(temp_file_name, "r") as f:
