@@ -52,7 +52,7 @@ class Agent:
     def send_messages(self, messages, max_attempts=3):
         response = client.chat.completions.create(model=self.model,
                                                   messages=[{"role": "system", "content": self.system_message}] + messages,
-                                                  temperature=1,
+                                                  temperature=0.1,
                                                   max_tokens=4096,
                                                   stream=True)
 
@@ -93,8 +93,10 @@ class Coordinator:
                     # Check if the file exists in the current directory
                     absolute_path = os.path.abspath(file_path)
                 else:
+                    file_contents += f"Path: {file_path}\n\n"
+                    continue
                     # Create a new file at the root of the git repository
-                    absolute_path = os.path.abspath(os.path.join(self.repo.working_dir, file_path))
+                    # absolute_path = os.path.abspath(os.path.join(self.repo.working_dir, file_path))
                     # with open(absolute_path, 'w') as file:
                     #     file.write("")
                 with open(absolute_path, 'r') as file:
@@ -151,10 +153,11 @@ class Coordinator:
             logger.error(f"Error: The coordinator agent did not return a valid JSON object: {response}")
             return
 
+
         # Step 2: Suggestor Agent
-        suggestor_message_directive = {"role": "user", "content": f"Use the following prompt as a directive for guidance on the intended goal of the refactoring process:\n\n{user_prompt}\n\n"}
-        suggestor_message_contents = {"role": "user", "content": json.dumps(relevant_files)}
-        text, codeblocks = self.suggestor_agent.send_messages([suggestor_message_directive, suggestor_message_contents])
+        json_message = {"user_prompt": user_prompt, "goal": response["goal"], "files": response["files"]}
+        suggestor_message_contents = {"role": "user", "content": json.dumps(json_message)}
+        text, codeblocks = self.suggestor_agent.send_messages([suggestor_message_contents])
         # After receiving tasks from the suggestor agent
         try:
             tasks = json.loads(codeblocks[0]["content"])["tasks"]
@@ -194,33 +197,37 @@ class Coordinator:
                 while not success:
                     try:
                         logger.info(f"Applying patch #{ix}")
-                        # extract first line into message
-                        message = patch.split("\n")[0]
-                        # remove first line
-                        patch = "\n".join(raw_patch.split("\n")[1:])
-                        # replace working_dir
-                        patch = patch.replace(self.repo.working_dir, "")
                         with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
                             temp_file.write(patch)
                             temp_file_name = temp_file.name
-                        self.repo.git.apply(temp_file_name,
-                                            recount=True,
-                                            allow_overlap=True,
-                                            ignore_space=True,
-                                            inaccurate_eof=True)
-                        self.repo.git.add(update=True)
-                        self.repo.index.commit(message, parent_commits=(self.branch.commit,))
+
+                        # Construct the patch command
+                        # Assuming the working directory is where you want the patch applied
+                        patch_command = ["patch", "-E", "--merge", "--verbose", "l", "-F5", "-i", temp_file_name]
+
+                        # Execute the patch command
+                        subprocess.run(patch_command, check=True, cwd=self.repo.working_dir)
+                        logger.info(f"Patch #{ix} applied successfully.")
+                        # self.repo.git.apply(temp_file_name,
+                        #                     recount=True,
+                        #                     allow_overlap=True,
+                        #                     ignore_space=True,
+                        #                     inaccurate_eof=True)
+                        # self.repo.git.add(update=True)
+                        # self.repo.index.commit(message, parent_commits=(self.branch.commit,))
                     except Exception as e:
                         logger.error(f"Failed to apply patch #{ix}:\n{e}")
                         logger.warning("What do you want to do with the patch file?")
                         action = inquirer.select("action", choices=["Edit", "Retry", "Skip"]).execute()
                         if action == "Edit":
                             # open with xdg-open and wait for user input
-                            with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
-                                temp_file.write(raw_patch)
-                                subprocess.run(["xdg-open", temp_file.name])
-                                input("Press enter to continue...")
-                                patch = temp_file.read()
+                            temp_file=tempfile.NamedTemporaryFile(mode='w+', delete=False)
+                            temp_file.write(raw_patch)
+                            temp_file.flush()
+                            subprocess.run(["xdg-open", temp_file.name])
+                            input("Press enter to continue...")
+                            patch = temp_file.read()
+                            temp_file.close()
                             continue
                         elif action == "Retry":
                             with open(temp_file_name, "r") as f:
