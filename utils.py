@@ -74,7 +74,7 @@ def convert_files_dict(file_dict):
 
 def extract_codeblocks(text):
     # Find all codeblocks, capture both the content and the language
-    codeblocks = re.findall(r'```(?P<language>\w+)\n(?P<content>.*?)```', text, re.DOTALL)
+    codeblocks = re.findall(r'```(?P<language>\w+)\n(?P<content>.*?)[\n\r]```[\n\r]?', text, re.DOTALL)
 
     # Return a list of codeblocks objects, each with the content and language
     return [{"content": codeblock, "language": language} for language, codeblock in codeblocks]
