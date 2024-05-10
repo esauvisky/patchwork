@@ -95,14 +95,14 @@ class Coordinator:
                     # Check if the file exists in the current directory
                     absolute_path = os.path.abspath(file_path)
                 else:
-                    file_contents += f"Path: {file_path}\n\n"
+                    file_contents += f"\n{file_path}:\n\n"
                     continue
                     # Create a new file at the root of the git repository
                     # absolute_path = os.path.abspath(os.path.join(self.repo.working_dir, file_path))
                     # with open(absolute_path, 'w') as file:
                     #     file.write("")
                 with open(absolute_path, 'r') as file:
-                    file_contents += f"Path: {absolute_path}\n```{os.path.basename(absolute_path).split('.')[0] if len(os.path.basename(absolute_path).split('.')) == 1 else os.path.basename(absolute_path).split('.')[1]}\n{file.read()}\n```\n"
+                    file_contents += f"\n{absolute_path}:\n```{os.path.basename(absolute_path).split('.')[0] if len(os.path.basename(absolute_path).split('.')) == 1 else os.path.basename(absolute_path).split('.')[1]}\n{file.read()}\n```\n"
                 logger.info(f"Found file: {absolute_path}. File size: {os.path.getsize(absolute_path)} bytes.")
             except Exception as e:
                 logger.error(f"Error reading file {file_path}: {e}")
