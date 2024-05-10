@@ -79,21 +79,25 @@ def extract_codeblocks(text):
     # Return a list of codeblocks objects, each with the content and language
     return [{"content": codeblock, "language": language} for language, codeblock in codeblocks]
 
-def select_options(options):
+
+def select_options(options, all_selected=False):
     """
     Allows the user to interactively select from a list of options.
 
     :param options: List of options available for selection.
+    :param all_selected: If True, all options are selected by default.
     :return: A list of selected indices.
     """
-    choices = [{"name": option, "value": idx} for idx, option in enumerate(options)]
+    choices = [{"name": option, "value": idx, "checked": all_selected} for idx, option in enumerate(options)]
     selected_indices = inquirer.checkbox(
         message="Select options:",
         choices=choices,
+        default=all_selected,
         validate=lambda result: len(result) > 0,
         invalid_message="You must select at least one option.",
     ).execute()
     return selected_indices
+
 
 def select_user_files(all_files):
     """
@@ -104,7 +108,7 @@ def select_user_files(all_files):
     selected_files = inquirer.checkbox(
         message="Select files or directories:",
         choices=choices,
-        validate=lambda result: len(result) > 0,
+        validate=lambda result: len(result) >= 0,
         invalid_message="You must select at least one file.",
     ).execute()
     return selected_files
