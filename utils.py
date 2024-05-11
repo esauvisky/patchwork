@@ -6,6 +6,7 @@ import shutil
 import pathspec
 from InquirerPy import inquirer
 from InquirerPy.validator import PathValidator
+import subprocess
 
 file_cache = {}
 
@@ -17,6 +18,19 @@ def validate_git_repo(path):
         print(f"Error: {path} is not a valid Git repository.")
         sys.exit(1)
 
+
+def run(cmd):
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout = result.stdout.decode("utf-8").strip()
+    stderr = result.stderr.decode("utf-8").strip()
+    if result.returncode != 0:
+        raise Exception(f"Command '{cmd}' failed with return code {result.returncode}.\nStdout: {stdout}.\nStderr: {stderr}")
+    return stdout, stderr
 
 def select_files(directory_path):
     files = os.listdir(directory_path)

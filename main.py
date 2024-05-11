@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from pdb import run
 from InquirerPy import inquirer
 from InquirerPy.validator import PathValidator
 import tempfile
@@ -9,9 +10,9 @@ import re
 from openai import OpenAI
 import json
 from unidiff import PatchSet
-from git import GitCommandError, Repo
+from git import GitCommandError, Repo, Git
 import constants
-from utils import convert_files_dict, extract_codeblocks, get_gitignore_files, get_user_prompt, select_files, select_options, select_user_files, validate_git_repo
+from utils import convert_files_dict, extract_codeblocks, get_gitignore_files, get_user_prompt, select_files, select_options, select_user_files, validate_git_repo, run
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 from typing import List
@@ -56,7 +57,7 @@ class Agent:
                                                   temperature=temperature if temperature else self.temperature,
                                                   max_tokens=4096,
                                                   stream=True)
-        formatted_message=str(messages).replace('\\n', "\n")
+        formatted_message = str(messages).replace('\\n', "\n")
         logger.trace(f"Agent {self.name} sending messages: {formatted_message}")
         output = []
         attempts = 0
@@ -88,24 +89,28 @@ class Coordinator:
         file_contents = ""
         for file_path in file_paths:
             try:
+                absolute_path = ""
                 if os.path.exists(os.path.join(self.repo.working_dir, file_path)):
                     # Check if the file exists at the root of the git repository
                     absolute_path = os.path.abspath(os.path.join(self.repo.working_dir, file_path))
                 elif os.path.exists(file_path):
                     # Check if the file exists in the current directory
                     absolute_path = os.path.abspath(file_path)
-                else:
-                    file_contents += f"\n{file_path}:\n\n"
+                # else:
+                if not os.path.exists(absolute_path):
+                    logger.warning(f"Error: File {absolute_path} does not exist. Will create a new empty file.")
+                    with open(absolute_path, 'w') as file:
+                        file.write("")
+                        file_contents += f"\n{absolute_path}:\n```{os.path.basename(absolute_path).split('.')[0] if len(os.path.basename(absolute_path).split('.')) == 1 else os.path.basename(absolute_path).split('.')[1]}\n\n```\n"
                     continue
-                    # Create a new file at the root of the git repository
-                    # absolute_path = os.path.abspath(os.path.join(self.repo.working_dir, file_path))
-                    # with open(absolute_path, 'w') as file:
-                    #     file.write("")
-                with open(absolute_path, 'r') as file:
-                    file_contents += f"\n{absolute_path}:\n```{os.path.basename(absolute_path).split('.')[0] if len(os.path.basename(absolute_path).split('.')) == 1 else os.path.basename(absolute_path).split('.')[1]}\n{file.read()}\n```\n"
-                logger.info(f"Found file: {absolute_path}. File size: {os.path.getsize(absolute_path)} bytes.")
+                else:
+                    with open(absolute_path, 'r') as file:
+                        file_contents += f"\n{absolute_path}:\n```{os.path.basename(absolute_path).split('.')[0] if len(os.path.basename(absolute_path).split('.')) == 1 else os.path.basename(absolute_path).split('.')[1]}\n{file.read()}\n```\n"
+                    logger.trace(f"Found file: {absolute_path}. File size: {os.path.getsize(absolute_path)} bytes.")
             except Exception as e:
                 logger.error(f"Error reading file {file_path}: {e}")
+
+        logger.info(f"Selected {len(file_paths)} files. Total size: {sum([os.path.getsize(file) for file in file_paths])/1024:.2f} kB.")
         return file_contents, file_paths
 
     def finalize(self):
@@ -125,7 +130,8 @@ class Coordinator:
         # goal = response["goal"]
 
         # Step 2: Suggestor Agent
-        suggestor_message_contents = {"role": "user", "content": relevant_files_contents + "\n\n---------------------\n" + response["goal"]}
+        suggestor_message_contents = {
+            "role": "user", "content": relevant_files_contents + "\n\n---------------------\n" + response["goal"]}
         text, codeblocks = self.suggestor_agent.send_messages([suggestor_message_contents])
         # After receiving tasks from the suggestor agent
         tasks = json.loads(codeblocks[0]["content"])["tasks"]
@@ -145,16 +151,18 @@ class Coordinator:
                 ix += 1
                 raw_patch = patches.pop(0)
 
-                patch = self.prepare_patch_for_git(raw_patch)
+                patch_file = self.prepare_patch_for_git(raw_patch)
 
                 try:
                     logger.info(f"Applying patch #{ix}")
-                    self.patch_with_git(patch)
+                    cmd = f"git apply --recount --verbose --unidiff-zero -C0 --allow-overlap --reject --ignore-space-change --ignore-whitespace --whitespace=warn --inaccurate-eof {patch_file}"
+                    stdout, stderr = run(cmd)
                 except Exception as git_error:
-                    logger.error(f"Failed to apply patch with GIT:\n{git_error}\nTrying again...")
+                    logger.warning(git_error)
+                    # Restore the previous state from stash
+                    self.repo.git.checkout(task["files"])
                     # clear the patches list
-                    patches = []
-                    patches.extend(self.get_patches(task, temperature=1))
+                    patches = self.get_patches(task, temperature=1)
                     logger.warning(f"Trying again with {len(patches)} patches.")
                     continue
                     # try:
@@ -166,7 +174,7 @@ class Coordinator:
                     # else:
                     #     logger.success(f"Patch #{ix} applied successfully.")
                 else:
-                    logger.success(f"Patch #{ix} applied successfully.")
+                    logger.success(f"Patch #{ix} applied successfully:\n{stdout}")
 
     def prepare_patch_for_git(self, raw_patch):
         patch = raw_patch.replace("\\n", "\n") + "\n"
@@ -180,54 +188,31 @@ class Coordinator:
 
         # Check if there were changes to the patch
         if new_patch == patch:
-            logger.warning(f"No changes to the patch file were made: {escaped_repo_base_path}.\nThe patch file is already in the correct format: {patch.splitlines()[0:2]}")
+            logger.info(f"Patch filepaths were not modified.")
         else:
-            logger.warning(f"Patch file was modified:\n{new_patch}. The patch file is now in the correct format: {patch.splitlines()[0:2]}")
+            logger.warning(f"Patch filepaths were modified. Stripped the following from the patch file:\n{escaped_repo_base_path}")
+
+        # Check if are there any changing +/- lines that have no content
+        if re.search(r"^[+-]\s+$", new_patch, flags=re.MULTILINE):
+            # strip whitespaces from these lines, keeping the + and - signs intact
+            new_patch = re.sub(r"^(\s*[+-])\s+$", r"\1", new_patch, flags=re.MULTILINE)
+            logger.warning(f"Patch had changes only in whitespace. Stripped them from the patch file.")
+
+        # Check for hunk headers that contain line numbers and replace them with @@ ... @@ to avoid conflicts
+        # @@ -19,7 +18,6 @@
+        # to
+        # @@ ... @@
+        if re.search(r"^@@ [-+\d\,\s]+ @@", new_patch, flags=re.MULTILINE):
+            # strip the line numbers from the hunk headers
+            new_patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", new_patch, flags=re.MULTILINE)
+            logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ ... @@.")
 
         # Write the modified patch to a temporary file
         with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
             temp_file.write(new_patch)
             temp_file_name = temp_file.name
+
         return temp_file_name
-
-
-    def patch_with_git(self, temp_file_name):
-        import subprocess
-
-        try:
-            # Save the current state
-            # self.repo.git.stash('save', "Stash before applying patch")
-
-            # Apply the patch
-            self.repo.git.apply(temp_file_name,
-                                recount=True,
-                                verbose=True,
-                                ignore_space_change=True,
-                                whitespace="fix",
-                                allow_overlap=True,
-                                ignore_space=True,
-                                allow_empty=True)
-
-            # # Add changes to staging
-            # self.repo.git.add(update=True)
-            # # Commit the changes
-            # self.repo.index.commit(description, parent_commits=(self.repo.active_branch.commit,))
-
-        except subprocess.CalledProcessError as e:
-            # Log error
-            logger.error(f"Failed to apply patch: {e}")
-
-            # Restore previous state from stash
-            # self.repo.git.stash('pop')
-            raise Exception("Failed to apply patch, reverted to previous state.")
-
-        except Exception as e:
-            # Log unexpected error
-            logger.error(f"Unexpected error: {e}")
-
-            # Restore previous state from stash
-            # self.repo.git.stash('pop')
-            raise
 
     def patch_with_patch(self, temp_file_name):
         import subprocess
@@ -360,11 +345,11 @@ def main():
 
     agent_coordinator = Agent(system_message=constants.SYSTEM_MESSAGES["agent_coordinator"],
                               name="agent_coordinator",
-                              temperature=0.2)
+                              temperature=0.5)
     agent_suggestor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_suggestor"],
                             name="agent_suggestor",
-                            temperature=0.2)
-    agent_editor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_editor"], name="agent_editor", temperature=0.2)
+                            temperature=0.5)
+    agent_editor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_editor"], name="agent_editor", temperature=0.5)
     coordinator = Coordinator(agent_coordinator, agents=[agent_suggestor, agent_editor], directory_path=directory_path)
 
     coordinator.run(prompt, selected_files)
