@@ -24,7 +24,7 @@ Your response should look like this (including the codeblock backticks):
 ```
 ```json
 {
-  "files": ["file_A.txt", "file_B.txt"],
+  "filepaths": ["file_A.txt", "file_B.txt"],
   "goal": "Enhance this project, with a specific emphasis on improving the patch application process, since it's frequent for patches to be unsuccessful in their application. Consider the majority of potential complications that can occur during the patch application process and try to address them."
 }
 ```
@@ -45,16 +45,16 @@ Take it step by step, ensuring tasks are well-defined and include all relevant f
   "tasks": [
     {
       "prompt": "Update file A with new data structures",
-      "files": ["/path/to/file_A.txt", "/path/to/file_B.txt", "/path/to/file_C.txt"],
+      "filepaths": ["/path/to/file_A.txt", "/path/to/file_B.txt", "/path/to/file_C.txt"],
       "info": "Update involves changing data handling in file_A, with impacts on references in files B and C."    },
     {
       "prompt": "Refactor file B to improve performance",
-      "files": ["/path/to/file_B.txt"],
+      "filepaths": ["/path/to/file_B.txt"],
       "info": "Focus on optimizing loop structures and memory usage."
     },
     {
       "prompt": "Create new file file_C.txt and move function from file_A.txt to it",
-      "files": ["/path/to/file_A.txt", "/path/to/file_C.txt"],
+      "filepaths": ["/path/to/file_A.txt", "/path/to/file_C.txt"],
       "info": "Ensure all function calls in other files are redirected to file_C.txt."
     }
   ]
@@ -68,15 +68,20 @@ As the `agent_editor`, your task is to create patch files that accurately implem
 2. Contains only the necessary changes specified in the task, excluding non-functional alterations like whitespace or comments unless explicitly required.
 3. Always use a single line of context whenever possible, unless doing so would lead to ambiguous patch application.
 
-Each patch should be a single hunk and presented within a codeblock. Ensure every patch is self-contained and directly applicable. Here is an example of a well-formed patch:
-```diff
-diff --git a/path/to/file_A.txt b/path/to/file_A.txt
-index 123abc..456def 100644
---- a/path/to/file_A.txt
-+++ b/path/to/file_A.txt
-@@ -10,7 +10,7 @@
-- old line of code
-+ new line of code
+Each patch should be a single hunk and presented within a JSON object. Ensure every patch is self-contained and directly applicable. Here is an example of a well-formed patch in the required format:
+```json
+{
+    "patches": [
+        "diff --git a/path/to/file_A.txt b/path/to/file_A.txt\\nindex 123abc..456def 100644\\n--- a/path/to/file_A.txt\\n+++ b/path/to/file_A.txt\\n@@ -10,7 +10,7 @@\\n- old line of code\\n+ new line of code",
+        "diff --git a/path/to/non_existent_file.txt b/path/to/non_existent_file.txt\\nnew file mode 100644\\nindex 0000000..789abcd\\n--- /dev/null\\n+++ b/path/to/non_existent_file.txt\\n@@ -0,0 +1,3 @@\\n+ This is a new file\\n+ with some initial content\\n+ for demonstration."
+    ]
+}
 ```
 Your patches should be succinct and efficient, aimed at ensuring successful application without the need for additional context or explanations.
 """
+
+ERROR_CODES = {
+    "PATCH_APPLY_FAILURE": "The patch could not be applied. Please review the patch and try again.",
+    "FILE_NOT_FOUND": "The specified file was not found. Ensure the file path is correct and try again.",
+    "INVALID_PATCH_FORMAT": "The patch format is invalid. Please check the patch and ensure it follows the correct format."
+}
