@@ -49,7 +49,7 @@ setup_logging("DEBUG")
 
 
 class Agent:
-    def __init__(self, system_message, name, model="gpt-4-turbo-preview", temperature=0.1):
+    def __init__(self, system_message, name, model="gpt-4o", temperature=0.1):
         self.name = name
         self.system_message = system_message
         self.model = model
@@ -87,7 +87,74 @@ class Coordinator:
         self.suggestor_agent = agents[0]
         self.editor_agent = agents[1]
         self.repo = Repo(directory_path)
-        # self.branch = self.repo.create_head('refactoring')
+
+    def run(self, user_prompt, file_paths):
+        user_input = self.get_file_contents(file_paths)[0] + "\n\n" + user_prompt
+        initial_tasks = self.get_initial_tasks(user_input)
+        tasks = self.generate_tasks(initial_tasks['files'], initial_tasks['goal'])
+        # tasks = self.generate_tasks(file_paths, initial_tasks['goal'])
+        successful_patches = []
+        for task in tasks:
+            patches = self.get_patches(task)
+            patches_files = [self.prepare_patch_for_git(patch) for patch in patches]
+            successful_patches += self.apply_patches(patches_files)
+        self.finalize(successful_patches)
+
+    def get_initial_tasks(self, user_input):
+        # Send initial user input to get files and goals refined
+        coordinator_output, codeblocks = self.coordinator_agent.send_messages([{"role": "user", "content": user_input}])
+        json_block = codeblocks[0]
+        tasks = json.loads(json_block["content"])
+        return tasks
+
+    def generate_tasks(self, files, refined_goal):
+        # Send files and refined goals to the suggestor to get detailed tasks
+        suggestor_input = json.dumps({"files": files, "goal": refined_goal})
+        _, codeblocks = self.suggestor_agent.send_messages([{"role": "user", "content": suggestor_input}])
+        tasks = json.loads(codeblocks[0]["content"])["tasks"]
+        return tasks
+
+    def apply_patches(self, patches):
+        successful_patches = []
+        for patch in patches:
+            if not self.apply_patch(patch):
+                action = self.handle_patch_failure(patch)
+                if action == "Retry":
+                    successful_patches += self.apply_patches([patch])  # Recursive retry
+                elif action == "Edit": # Allow user to modify the patch or task details
+                    edited_patch = self.edit_patch(patch)
+                    successful_patches += self.apply_patches([edited_patch])
+                elif action == "Skip":
+                    continue
+            else:
+                successful_patches.append(patch)
+        return successful_patches
+
+    def handle_patch_failure(self, patch):
+        choices = ["Retry", "Edit", "Skip"]
+        questions = [{
+            'type': 'list', 'name': 'response', 'message': 'Patch application failed. Choose an action:', 'choices': choices}]
+        response = prompt(questions)
+        return response['response']
+
+    def edit_patch(self, patch):
+        # Create a temporary file to hold the patch
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".patch", mode='w+') as tf:
+            tf.write(patch)
+            temp_file_path = tf.name
+
+        # Open the temporary file in the default editor
+        editor = os.environ.get('EDITOR', 'subl')
+        call([editor, temp_file_path])
+
+        # After editing, read the modified patch back from the file
+        with open(temp_file_path, 'r') as tf:
+            edited_patch = tf.read()
+
+        # Optionally, clean up the temporary file
+        os.remove(temp_file_path)
+
+        return edited_patch
 
     def get_file_contents(self, file_paths):
         file_contents = ""
@@ -117,68 +184,55 @@ class Coordinator:
         logger.info(f"Selected {len(file_paths)} files. Total size: {sum([os.path.getsize(file) for file in file_paths])/1024:.2f} kB.")
         return file_contents, file_paths
 
-    def finalize(self):
-        pass
-        # self.branch.checkout()
-        # self.repo.git.merge('refactoring')
+    def apply_patch(self, patch):
+        try:
+            cmd = f"git apply --recount --verbose --unidiff-zero -C0 --allow-overlap --reject --ignore-space-change --ignore-whitespace --whitespace=warn --inaccurate-eof {patch}"
+            run(cmd)
+            logger.success("Patch applied successfully.")
+        except Exception as e:
+            logger.error(f"Patch application failed: {str(e)}. Attempting to fix and reapply.")
+            return False
+        return True
+    def handle_task_selection(self, tasks):
+        tasks_descriptions = [task["prompt"] for task in tasks]
+        selected_indices = inquirer.checkbox(message="Please select the refactoring tasks you want to proceed with:",
+                                             choices=[{"name": desc, "value": idx}
+                                                      for idx, desc in enumerate(tasks_descriptions)]).execute()
+        return [tasks[i] for i in selected_indices]
 
-    def run(self, user_prompt, file_paths):
-        file_contents, file_paths = self.get_file_contents(file_paths)
-        user_input = file_contents + "\n\n" + user_prompt
+    def finalize(self, successful_patches):
+        if successful_patches:
+            self.repo.git.commit('-am', 'Applied successful patches')
+        self.repo.git.checkout() # Return to the main branch or clean up
 
-        # Step 1: Coordinator Agent
-        coordinator_message = {"role": "user", "content": user_input}
-        _, codeblocks = self.coordinator_agent.send_messages([coordinator_message])
-        response = json.loads(codeblocks[0]["content"])
-        relevant_files_contents, _ = self.get_file_contents(response["files"])
-        # goal = response["goal"]
+    def get_patches(self, task, error=None, temperature=None):
+        prompt = task["prompt"]
+        files_contents, file_paths = self.get_file_contents(task["files"])
+        user_input = files_contents + "\n\n" + prompt + "\n\n"
+        if error:
+            user_input += f"The error was: {error}. Please try again."
 
-        # Step 2: Suggestor Agent
-        suggestor_message_contents = {
-            "role": "user", "content": relevant_files_contents + "\n\n---------------------\n" + response["goal"]}
-        text, codeblocks = self.suggestor_agent.send_messages([suggestor_message_contents])
-        # After receiving tasks from the suggestor agent
-        tasks = json.loads(codeblocks[0]["content"])["tasks"]
-        tasks_descriptions = [task["prompt"] for task in tasks] # Assuming each task has a 'description' field
+        editor_messages = [{"role": "user", "content": user_input}]
+        text, codeblocks = self.editor_agent.send_messages(editor_messages, temperature=temperature)
 
-        # Present tasks to the user for selection
-        print("Please select the refactoring tasks you want to proceed with:")
-        selected_tasks_indices = select_options(tasks_descriptions, all_selected=True)
-        selected_tasks = [tasks[i] for i in selected_tasks_indices]
+        patches = [
+            codeblock["content"]
+            for codeblock in codeblocks
+            if codeblock["language"] == "patch" or codeblock["language"] == "diff"]
+        # further split patches at the diff hunk boundary
+        all_patches = []
+        for patch in patches:
+            splits = patch.split("diff --git")
+            if len(splits) > 1:
+                for split in splits[1:]:
+                    all_patches.append("diff --git" + split)
+            else:
+                all_patches.append(patch)
 
-        # Proceed with only the selected tasks
-        for task in selected_tasks:
-            patches = self.get_patches(task)
+        patches = all_patches
 
-            ix = 0
-            while patches:
-                ix += 1
-                raw_patch = patches.pop(0)
-
-                patch_file = self.prepare_patch_for_git(raw_patch)
-
-                try:
-                    logger.info(f"Applying patch #{ix}")
-                    cmd = f"git apply --recount --verbose --unidiff-zero -C0 --allow-overlap --reject --ignore-space-change --ignore-whitespace --whitespace=warn --inaccurate-eof {patch_file}"
-                    stdout, stderr = run(cmd)
-                except Exception as git_error:
-                    logger.warning(git_error)
-                    # Restore the previous state from stash
-                    self.repo.git.checkout(task["files"])
-                    # clear the patches list
-                    patches = self.get_patches(task, temperature=1)
-                    logger.warning(f"Trying again with {len(patches)} patches.")
-                    continue
-                    # try:
-                    #     patch = self.prepare_patch_for_patch(raw_patch)
-                    #     self.patch_with_patch(patch)
-                    # except Exception as patch_error:
-                    #     logger.error(f"Failed to apply patch with patch:\n{patch_error}\nTrying again...")
-                    #     patches.insert(0, self.get_fixed_patch(task["files"], patch, git_error))
-                    # else:
-                    #     logger.success(f"Patch #{ix} applied successfully.")
-                else:
-                    logger.success(f"Patch #{ix} applied successfully:\n{stdout}")
+        logger.info(f"{len(patches)} patches for this task")
+        return patches
 
     def prepare_patch_for_git(self, raw_patch):
         patch = raw_patch.replace("\\n", "\n") + "\n"
@@ -217,90 +271,6 @@ class Coordinator:
             temp_file_name = temp_file.name
 
         return temp_file_name
-
-    def patch_with_patch(self, temp_file_name):
-        import subprocess
-
-        try:
-            # Save the current state
-            self.repo.git.stash('save', "Stash before manual patching")
-
-            # Execute the patch command
-            patch_command = ["patch", "-E", "--merge", "--verbose", "-l", "-F5", "-i", temp_file_name]
-            subproc = subprocess.run(patch_command, check=True, cwd=self.repo.working_dir, capture_output=True)
-            logger.info("Patch applied successfully.")
-
-        except subprocess.CalledProcessError as e:
-            # Log error and output
-            logger.error(f"Patch failed to apply. Error: {e.stderr.decode()}")
-
-            # Restore previous state from stash
-            self.repo.git.stash('pop')
-            raise Exception(f"Patch failed to apply, reverted to previous state. Error: {e.stderr.decode()}")
-
-        except Exception as e:
-            # Log unexpected error
-            logger.error(f"Unexpected error: {e}")
-
-            # Restore previous state from stash
-            self.repo.git.stash('pop')
-            raise
-
-    # def deal_with_patch_error(self, task, error):
-    #     logger.warning("What do you want to do with the patch file?")
-    #     action = inquirer.select("action", choices=["Edit", "Retry", "Skip"]).execute()
-    #     if action == "Edit":
-    #         # open with xdg-open and wait for user input
-    #         # temp_file=tempfile.NamedTemporaryFile(mode='w+', delete=False)
-    #         # temp_file.write(raw_patch)
-    #         # temp_file.flush()
-    #         subprocess.run(["xdg-open", temp_file.name])
-    #         input("Press enter to continue...")
-    #         with open(temp_file_name, "r") as f:
-    #             patch = f.read()
-    #         continue
-    #     elif action == "Retry":
-    #         with open(temp_file_name, "r") as f:
-    #             patch = f.read()
-    #         editor_messages.append({
-    #             "role": "user", "content": f"Patch:\n{patch}\n\nError:{e}\nYour patch failed to apply. Please provide a new patch."})
-    #         text, codeblocks = self.editor_agent.send_messages(editor_messages)
-    #         patch = next(codeblock["content"]
-    #                         for codeblock in codeblocks
-    #                         if codeblock["language"] == "patch" or codeblock["language"] == "diff")
-    #         continue
-    #     elif action == "Skip":
-    #         success = True
-    #         continue
-
-    def get_patches(self, task, error=None, temperature=None):
-        prompt = task["prompt"]
-        files_contents, file_paths = self.get_file_contents(task["files"])
-        user_input = files_contents + "\n\n" + prompt + "\n\n"
-        if error:
-            user_input += f"The error was: {error}. Please try again."
-
-        editor_messages = [{"role": "user", "content": user_input}]
-        text, codeblocks = self.editor_agent.send_messages(editor_messages, temperature=temperature)
-
-        patches = [
-            codeblock["content"]
-            for codeblock in codeblocks
-            if codeblock["language"] == "patch" or codeblock["language"] == "diff"]
-        # further split patches at the diff hunk boundary
-        all_patches = []
-        for patch in patches:
-            splits = patch.split("diff --git")
-            if len(splits) > 1:
-                for split in splits[1:]:
-                    all_patches.append("diff --git" + split)
-            else:
-                all_patches.append(patch)
-
-        patches = all_patches
-
-        logger.info(f"{len(patches)} patches for this task")
-        return patches
 
     def get_fixed_patch(self, files_contents, patch, error):
         user_input = files_contents + "\n\n"
@@ -349,11 +319,11 @@ def main():
 
     agent_coordinator = Agent(system_message=constants.SYSTEM_MESSAGES["agent_coordinator"],
                               name="agent_coordinator",
-                              temperature=0.5)
+                              temperature=0)
     agent_suggestor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_suggestor"],
                             name="agent_suggestor",
-                            temperature=0.5)
-    agent_editor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_editor"], name="agent_editor", temperature=0.5)
+                            temperature=0)
+    agent_editor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_editor"], name="agent_editor", temperature=0)
     coordinator = Coordinator(agent_coordinator, agents=[agent_suggestor, agent_editor], directory_path=directory_path)
 
     coordinator.run(prompt, selected_files)
