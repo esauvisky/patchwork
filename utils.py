@@ -91,7 +91,7 @@ def get_file_contents_and_copy(file_paths):
 def get_gitignore_files(directory_path):
     with open(os.path.join(directory_path, '.gitignore'), 'r') as f:
         gitignore = f.read()
-    spec = pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, gitignore.splitlines())
+    spec = pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, gitignore.splitlines()) # type: ignore
     all_files = [os.path.join(root, name) for root, dirs, files in os.walk(directory_path) for name in files]
     ignored_files = list(spec.match_files(all_files))
     return ignored_files
@@ -122,7 +122,7 @@ def select_options(options, all_selected=False):
     :return: A list of selected indices.
     """
     choices = [{"name": option, "value": idx, "checked": all_selected} for idx, option in enumerate(options)]
-    selected_indices = inquirer.checkbox(
+    selected_indices = inquirer.checkbox( # type: ignore
         message="Select options:",
         choices=choices,
         default=all_selected,
@@ -138,7 +138,7 @@ def select_user_files(all_files):
     :return: A list of selected file paths.
     """
     choices = [{"name": file, "value": file} for file in all_files]
-    selected_files = inquirer.checkbox(
+    selected_files = inquirer.checkbox( # type: ignore
         message="Select files or directories:",
         choices=choices,
         validate=lambda result: len(result) >= 0,
