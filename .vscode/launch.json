@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "main.py",
             "console": "integratedTerminal",
-            "args": "."
+            "args": [".", "main.py", "utils.py", "constants.py"]
         }
     ]
 }
