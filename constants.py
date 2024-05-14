@@ -73,7 +73,6 @@ Each patch should be a single hunk and presented within a JSON object. Ensure ev
 {
     "patches": [
         "diff --git a/path/to/file_A.txt b/path/to/file_A.txt\\nindex 123abc..456def 100644\\n--- a/path/to/file_A.txt\\n+++ b/path/to/file_A.txt\\n@@ -10,7 +10,7 @@\\n- old line of code\\n+ new line of code",
-        "diff --git a/path/to/non_existent_file.txt b/path/to/non_existent_file.txt\\nnew file mode 100644\\nindex 0000000..789abcd\\n--- /dev/null\\n+++ b/path/to/non_existent_file.txt\\n@@ -0,0 +1,3 @@\\n+ This is a new file\\n+ with some initial content\\n+ for demonstration."
     ]
 }
 ```
