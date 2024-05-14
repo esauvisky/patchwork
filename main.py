@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 from pdb import run
-from InquirerPy import inquirer
+from InquirerPy.resolver import prompt
+from InquirerPy import inquirer as inquirer
 from InquirerPy.validator import PathValidator
 import tempfile
+import os
+import tempfile
+from subprocess import call
 import subprocess
 import io
 import os

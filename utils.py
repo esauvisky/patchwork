@@ -7,6 +7,8 @@ import pathspec
 from InquirerPy import inquirer
 from InquirerPy.validator import PathValidator
 import subprocess
+import shlex
+from loguru import logger
 
 file_cache = {}
 
@@ -19,18 +21,35 @@ def validate_git_repo(path):
         sys.exit(1)
 
 
-def run(cmd):
-    result = subprocess.run(
-        cmd,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    stdout = result.stdout.decode("utf-8").strip()
-    stderr = result.stderr.decode("utf-8").strip()
-    if result.returncode != 0:
-        raise Exception(f"Command '{cmd}' failed with return code {result.returncode}.\nStdout: {stdout}.\nStderr: {stderr}")
-    return stdout, stderr
+def run(command):
+    """
+    Execute a shell command and capture its output and error states.
+
+    Args:
+        command (str): The command to run in the shell.
+
+    Returns:
+        tuple: A tuple containing the standard output (stdout), standard error (stderr),
+               and the exit code of the command. A normal exit will have a code of 0.
+
+    Raises:
+        subprocess.CalledProcessError: If the command returns a non-zero exit code.
+    """
+    try:
+        # Execute the command and wait for it to finish, capturing stdout and stderr
+        result = subprocess.run(command, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        # Log the successful execution and its output
+        logger.debug(f"Command executed successfully: {command}\nOutput: {result.stdout}")
+        return result.stdout, result.stderr, result.returncode
+    except subprocess.CalledProcessError as e:
+        # Log the error with detailed information
+        logger.error(f"Command '{command}' failed with return code {e.returncode}.\nStdout: {e.stdout}.\nStderr: {e.stderr}")
+        raise  # Optionally re-raise the error to handle it at a higher level
+    except Exception as e:
+        # Log any other exceptions that may occur
+        logger.error(f"An unexpected error occurred while running command: {command}\nError: {str(e)}")
+        raise  # Re-raise the exception after logging for further handling
+
 
 def select_files(directory_path):
     files = os.listdir(directory_path)
