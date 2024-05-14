@@ -257,6 +257,9 @@ class Coordinator:
             new_patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", new_patch, flags=re.MULTILINE)
             logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ ... @@.")
 
+        # replace any sequence of \n at the end of the patch with a single \n
+        new_patch = new_patch.rstrip("\n") + "\n"
+
         # Write the modified patch to a temporary file
         with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
             temp_file.write(new_patch)
