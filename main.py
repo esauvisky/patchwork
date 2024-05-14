@@ -60,6 +60,7 @@ class Agent:
                                                   messages=[{"role": "system", "content": self.system_message}] + messages,
                                                   temperature=temperature if temperature else self.temperature,
                                                   max_tokens=4096,
+                                                  response_format={"type": "json_object"},
                                                   stream=True)
         formatted_message = str(messages).replace('\\n', "\n")
         logger.trace(f"Agent {self.name} sending messages: {formatted_message}")
@@ -77,8 +78,9 @@ class Agent:
                     logger.error(f"Error: Agent {self.name} did not provide a valid response after {max_attempts} attempts.")
                     break
         sys.stdout.write("\n")
-        output = "".join(output)
-        return output, extract_codeblocks(output)
+
+        output = json.loads("".join(output))
+        return output
 
 
 class Coordinator:
@@ -88,11 +90,16 @@ class Coordinator:
         self.editor_agent = agents[1]
         self.repo = Repo(directory_path)
 
-    def run(self, user_prompt, file_paths):
-        user_input = self.get_file_contents(file_paths)[0] + "\n\n" + user_prompt
-        initial_tasks = self.get_initial_tasks(user_input)
-        tasks = self.generate_tasks(initial_tasks['files'], initial_tasks['goal'])
-        # tasks = self.generate_tasks(file_paths, initial_tasks['goal'])
+    def run(self, user_prompt, filepaths):
+        project_files = self.get_file_contents(filepaths)
+        user_input = json.dumps({"files": project_files, "prompt": user_prompt})
+        coordinator_output = self.coordinator_agent.send_messages([{"role": "user", "content": user_input}])
+
+        goal_files = self.get_file_contents(coordinator_output['filepaths'])
+        suggestor_input = json.dumps({"files": goal_files, "goal": coordinator_output['goal']})
+        suggestor_output = self.suggestor_agent.send_messages([{"role": "user", "content": suggestor_input}])
+
+        tasks = suggestor_output['tasks']
         successful_patches = []
         for task in tasks:
             patches = self.get_patches(task)
@@ -100,28 +107,14 @@ class Coordinator:
             successful_patches += self.apply_patches(patches_files)
         self.finalize(successful_patches)
 
-    def get_initial_tasks(self, user_input):
-        # Send initial user input to get files and goals refined
-        coordinator_output, codeblocks = self.coordinator_agent.send_messages([{"role": "user", "content": user_input}])
-        json_block = codeblocks[0]
-        tasks = json.loads(json_block["content"])
-        return tasks
-
-    def generate_tasks(self, files, refined_goal):
-        # Send files and refined goals to the suggestor to get detailed tasks
-        suggestor_input = json.dumps({"files": files, "goal": refined_goal})
-        _, codeblocks = self.suggestor_agent.send_messages([{"role": "user", "content": suggestor_input}])
-        tasks = json.loads(codeblocks[0]["content"])["tasks"]
-        return tasks
-
     def apply_patches(self, patches):
         successful_patches = []
         for patch in patches:
             if not self.apply_patch(patch):
                 action = self.handle_patch_failure(patch)
                 if action == "Retry":
-                    successful_patches += self.apply_patches([patch])  # Recursive retry
-                elif action == "Edit": # Allow user to modify the patch or task details
+                    successful_patches += self.apply_patches([patch]) # Recursive retry
+                elif action == "Edit":                                # Allow user to modify the patch or task details
                     edited_patch = self.edit_patch(patch)
                     successful_patches += self.apply_patches([edited_patch])
                 elif action == "Skip":
@@ -157,7 +150,8 @@ class Coordinator:
         return edited_patch
 
     def get_file_contents(self, file_paths):
-        file_contents = ""
+        files_dict = {}
+
         for file_path in file_paths:
             try:
                 absolute_path = ""
@@ -167,22 +161,23 @@ class Coordinator:
                 elif os.path.exists(file_path):
                     # Check if the file exists in the current directory
                     absolute_path = os.path.abspath(file_path)
-                # else:
+
                 if not os.path.exists(absolute_path):
                     logger.warning(f"Error: File {absolute_path} does not exist. Will create a new empty file.")
                     with open(absolute_path, 'w') as file:
                         file.write("")
-                        file_contents += f"\n{absolute_path}:\n```{os.path.basename(absolute_path).split('.')[0] if len(os.path.basename(absolute_path).split('.')) == 1 else os.path.basename(absolute_path).split('.')[1]}\n\n```\n"
+                        files_dict[absolute_path] = ""
                     continue
                 else:
                     with open(absolute_path, 'r') as file:
-                        file_contents += f"\n{absolute_path}:\n```{os.path.basename(absolute_path).split('.')[0] if len(os.path.basename(absolute_path).split('.')) == 1 else os.path.basename(absolute_path).split('.')[1]}\n{file.read()}\n```\n"
+                        files_dict[absolute_path] = file.read()
                     logger.trace(f"Found file: {absolute_path}. File size: {os.path.getsize(absolute_path)} bytes.")
             except Exception as e:
                 logger.error(f"Error reading file {file_path}: {e}")
 
         logger.info(f"Selected {len(file_paths)} files. Total size: {sum([os.path.getsize(file) for file in file_paths])/1024:.2f} kB.")
-        return file_contents, file_paths
+
+        return files_dict
 
     def apply_patch(self, patch):
         try:
@@ -193,9 +188,10 @@ class Coordinator:
             logger.error(f"Patch application failed: {str(e)}. Attempting to fix and reapply.")
             return False
         return True
+
     def handle_task_selection(self, tasks):
         tasks_descriptions = [task["prompt"] for task in tasks]
-        selected_indices = inquirer.checkbox(message="Please select the refactoring tasks you want to proceed with:",
+        selected_indices = inquirer.checkbox(message="Please select the refactoring tasks you want to proceed with:", # type: ignore
                                              choices=[{"name": desc, "value": idx}
                                                       for idx, desc in enumerate(tasks_descriptions)]).execute()
         return [tasks[i] for i in selected_indices]
@@ -206,19 +202,17 @@ class Coordinator:
         self.repo.git.checkout() # Return to the main branch or clean up
 
     def get_patches(self, task, error=None, temperature=None):
-        prompt = task["prompt"]
-        files_contents, file_paths = self.get_file_contents(task["files"])
-        user_input = files_contents + "\n\n" + prompt + "\n\n"
+        prompt = f'{task["prompt"]}\n{task["info"]}'
+        files = self.get_file_contents(task["filepaths"])
+
         if error:
-            user_input += f"The error was: {error}. Please try again."
+            prompt += f"\n\nThe error was: {error}. Please try again."
 
-        editor_messages = [{"role": "user", "content": user_input}]
-        text, codeblocks = self.editor_agent.send_messages(editor_messages, temperature=temperature)
+        message = json.dumps({"files": files, "prompt": prompt})
+        editor_messages = [{"role": "user", "content": message}]
+        editor_output = self.editor_agent.send_messages(editor_messages, temperature=temperature)
+        patches = editor_output['patches']
 
-        patches = [
-            codeblock["content"]
-            for codeblock in codeblocks
-            if codeblock["language"] == "patch" or codeblock["language"] == "diff"]
         # further split patches at the diff hunk boundary
         all_patches = []
         for patch in patches:
@@ -257,9 +251,7 @@ class Coordinator:
             logger.warning(f"Patch had changes only in whitespace. Stripped them from the patch file.")
 
         # Check for hunk headers that contain line numbers and replace them with @@ ... @@ to avoid conflicts
-        # @@ -19,7 +18,6 @@
-        # to
-        # @@ ... @@
+        # e.g.: from "@@ -19,7 +18,6 @@" to "@@ -0,0 +0,0 @@"
         if re.search(r"^@@ [-+\d\,\s]+ @@", new_patch, flags=re.MULTILINE):
             # strip the line numbers from the hunk headers
             new_patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", new_patch, flags=re.MULTILINE)
