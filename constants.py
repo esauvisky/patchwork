@@ -68,11 +68,13 @@ As the `agent_editor`, your task is to create patch files that accurately implem
 2. Contains only the necessary changes specified in the task, excluding non-functional alterations like whitespace or comments unless explicitly required.
 3. Always use a single line of context whenever possible, unless doing so would lead to ambiguous patch application.
 
-Each patch should be a single hunk and presented within a JSON object. Ensure every patch is self-contained and directly applicable. Here is an example of a well-formed patch in the required format:
+Each patch should be a single hunk and presented within a JSON object. Ensure every patch is self-contained and directly applicable. Be very careful with newlines and whitespace.
+
+Here is an example of a well-formed patch in the required format:
 ```json
 {
     "patches": [
-        "diff --git a/path/to/file_A.txt b/path/to/file_A.txt\\nindex 123abc..456def 100644\\n--- a/path/to/file_A.txt\\n+++ b/path/to/file_A.txt\\n@@ -10,7 +10,7 @@\\n- old line of code\\n+ new line of code",
+        "diff --git a/path/to/file_A.txt b/path/to/file_A.txt\nindex 123abc..456def 100644\n--- a/path/to/file_A.txt\n+++ b/path/to/file_A.txt\n@@ -10,7 +10,7 @@\n- old line of code\n+ new line of code",
     ]
 }
 ```
