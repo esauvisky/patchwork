@@ -96,7 +96,7 @@ class Coordinator:
         coordinator_output = self.coordinator_agent.send_messages([{"role": "user", "content": user_input}])
 
         goal_files = self.get_file_contents(coordinator_output['filepaths'])
-        suggestor_input = json.dumps({"files": goal_files, "goal": coordinator_output['goal']})
+        suggestor_input = json.dumps({"files": goal_files, "goal": coordinator_output['goal'], "user_prompt": user_prompt})
         suggestor_output = self.suggestor_agent.send_messages([{"role": "user", "content": suggestor_input}])
 
         tasks = suggestor_output['tasks']
@@ -105,18 +105,19 @@ class Coordinator:
             patches = self.get_patches(task)
             patches_files = [self.prepare_patch_for_git(patch) for patch in patches]
             successful_patches += self.apply_patches(patches_files)
-        self.finalize(successful_patches)
 
     def apply_patches(self, patches):
         successful_patches = []
-        for patch in patches:
+        while patches:
+            patch = patches.pop(0)
             if not self.apply_patch(patch):
                 action = self.handle_patch_failure(patch)
-                if action == "Retry":
-                    successful_patches += self.apply_patches([patch]) # Recursive retry
-                elif action == "Edit":                                # Allow user to modify the patch or task details
+                # if action == "Retry":
+                #     # TODO: try asking for a new patch
+                #     continue
+                if action == "Edit":
                     edited_patch = self.edit_patch(patch)
-                    successful_patches += self.apply_patches([edited_patch])
+                    patches.insert(0, edited_patch) # Insert the edited patch at the beginning of the list
                 elif action == "Skip":
                     continue
             else:
@@ -124,30 +125,19 @@ class Coordinator:
         return successful_patches
 
     def handle_patch_failure(self, patch):
-        choices = ["Retry", "Edit", "Skip"]
+        # choices = ["Retry", "Edit", "Skip"]
+        choices = ["Edit", "Skip"]
         questions = [{
             'type': 'list', 'name': 'response', 'message': 'Patch application failed. Choose an action:', 'choices': choices}]
         response = prompt(questions)
         return response['response']
 
     def edit_patch(self, patch):
-        # Create a temporary file to hold the patch
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".patch", mode='w+') as tf:
-            tf.write(patch)
-            temp_file_path = tf.name
-
         # Open the temporary file in the default editor
-        editor = os.environ.get('EDITOR', 'subl')
-        call([editor, temp_file_path])
-
-        # After editing, read the modified patch back from the file
-        with open(temp_file_path, 'r') as tf:
-            edited_patch = tf.read()
-
-        # Optionally, clean up the temporary file
-        os.remove(temp_file_path)
-
-        return edited_patch
+        editors = ["subl", "subl3", "code", os.environ.get('EDITOR')]
+        editor = [editor for editor in editors if os.path.exists(f"/usr/bin/{editor}" or f"/usr/local/bin/{editor}")][0]
+        call([editor, "-w", patch])
+        return patch
 
     def get_file_contents(self, file_paths):
         files_dict = {}
@@ -162,16 +152,18 @@ class Coordinator:
                     # Check if the file exists in the current directory
                     absolute_path = os.path.abspath(file_path)
 
+                relative_path = os.path.relpath(absolute_path, self.repo.working_dir)
+
                 if not os.path.exists(absolute_path):
                     logger.warning(f"Error: File {absolute_path} does not exist. Will create a new empty file.")
                     with open(absolute_path, 'w') as file:
                         file.write("")
-                        files_dict[absolute_path] = ""
+                        files_dict[relative_path] = ""
                     continue
                 else:
                     with open(absolute_path, 'r') as file:
-                        files_dict[absolute_path] = file.read()
-                    logger.trace(f"Found file: {absolute_path}. File size: {os.path.getsize(absolute_path)} bytes.")
+                        files_dict[relative_path] = file.read()
+                    logger.trace(f"Found file: {relative_path}. File size: {os.path.getsize(absolute_path)} bytes.")
             except Exception as e:
                 logger.error(f"Error reading file {file_path}: {e}")
 
@@ -185,7 +177,6 @@ class Coordinator:
             run(cmd)
             logger.success("Patch applied successfully.")
         except Exception as e:
-            logger.error(f"Patch application failed: {str(e)}. Attempting to fix and reapply.")
             return False
         return True
 
@@ -195,11 +186,6 @@ class Coordinator:
                                              choices=[{"name": desc, "value": idx}
                                                       for idx, desc in enumerate(tasks_descriptions)]).execute()
         return [tasks[i] for i in selected_indices]
-
-    def finalize(self, successful_patches):
-        if successful_patches:
-            self.repo.git.commit('-am', 'Applied successful patches')
-        self.repo.git.checkout() # Return to the main branch or clean up
 
     def get_patches(self, task, error=None, temperature=None):
         prompt = f'{task["prompt"]}\n{task["info"]}'
@@ -238,6 +224,13 @@ class Coordinator:
         # do it with regex, replacing any occurrence of the normalized repo path with an empty string
         new_patch = re.sub(escaped_repo_base_path + "/", "", patch, flags=re.MULTILINE)
 
+        # Handle complex cases where paths might still contain parts of the absolute path
+        normalized_repo_path_segments = normalized_repo_path.split('/')
+        for i in range(len(normalized_repo_path_segments), 0, -1):
+            partial_path = "/".join(normalized_repo_path_segments[:i])
+            escaped_partial_path = re.escape(partial_path)
+            new_patch = re.sub(rf"{escaped_partial_path}/", "", new_patch, flags=re.MULTILINE)
+
         # Check if there were changes to the patch
         if new_patch == patch:
             logger.info(f"Patch filepaths were not modified.")
@@ -255,7 +248,7 @@ class Coordinator:
         if re.search(r"^@@ [-+\d\,\s]+ @@", new_patch, flags=re.MULTILINE):
             # strip the line numbers from the hunk headers
             new_patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", new_patch, flags=re.MULTILINE)
-            logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ ... @@.")
+            logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ -0,0 +0,0 @@.")
 
         # replace any sequence of \n at the end of the patch with a single \n
         new_patch = new_patch.rstrip("\n") + "\n"
