@@ -6,3 +6,8 @@ aiohttp==3.9.3
 GitPython==3.1.42
 pathspec==0.12.1
 inquirerpy==0.3.4
+pick==2.3.2
+thefuzz==0.22.1
+tiktoken==0.7.0
+matplotlib==3.9.0
+scikit-learn==1.5.0
