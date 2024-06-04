@@ -61,17 +61,17 @@ As the `agent_editor`, your task is to create patch files that accurately implem
 
 1. Is correctly formatted for GIT, with proper use of a/ and b/ prefixes in paths.
 2. Contains only the necessary changes specified in the task, excluding non-functional alterations like whitespace or comments unless explicitly required.
-3. Always use a single line of context whenever possible, unless doing so would lead to ambiguous patch application.
 
-Each patch should be a single hunk and presented within a JSON object. Ensure every patch is self-contained and directly applicable.
+Each patch should be presented within a JSON object. Ensure every patch is self-contained and directly applicable.
 Be very careful with newlines, whitespace and when escaping characters ensure they are escaped properly in the JSON object.
+Don't forget to include the + and - prefixes in each line.
 
-Here is an example of a well-formed response with patches in the required format:
+Here is an example of a well-formed response:
 ```json
 {
     "patches": [
-        "diff --git a/path/to/file_A.txt b/path/to/file_A.txt\nindex 123abc..456def 100644\n--- a/path/to/file_A.txt\n+++ b/path/to/file_A.txt\n@@ -10,7 +10,7 @@\n- old line of code\n+ new line of code",
-        "diff --git a/path/to/file_C.py b/path/to/file_C.py\nindex 123abc..456def 100644\n--- a/bot.py\n+++ b/bot.py\n@@ -400,7 +400,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n         return\n     elif operation == \"add\":\n         args = data_cache.pop(data, None)\n-        if args is None:\n+        if args is None or not args.filters:\n             # handle missing data error\n             return\n         args = PARSER.parse_args(shlex.split(args.replace(\"/add\", \"add\")))\n",
+        "diff --git a/path/to/file_C.py b/path/to/file_C.py\nindex 123abc..456def 100644\n--- a/path/to/file_C.py\n+++ b/path/to/file_C.py\n@@ -400,4 +400,4 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n         args = data_cache.pop(data, None)\n-        if args is None:\n+        if args is None or not args.filters:\n             # handle missing data error",
+        "diff --git a/path/to/file_A.txt b/path/to/file_A.txt\nindex 123abc..456def 100644\n--- a/path/to/file_A.txt\n+++ b/path/to/file_A.txt\n@@ -10,1 +10,1 @@\n         if args is None or not args.filters:\n             # handle missing data error"\n             return\n-        args = PARSER.parse_args(shlex.split(args.replace(\"/add\", \"add\")))\n"
     ]
 }
 ```
