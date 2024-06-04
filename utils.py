@@ -9,6 +9,8 @@ from InquirerPy.validator import PathValidator
 import subprocess
 import shlex
 from loguru import logger
+from colorama import init, Fore, Style
+
 
 file_cache = {}
 
@@ -61,10 +63,21 @@ def select_files(directory_path):
     file_paths = [os.path.join(directory_path, files[int(i) - 1]) for i in selected_files]
     return file_paths
 
-
 def get_user_prompt():
-    print("Enter a prompt to use for the refactoring. The prompt should describe the refactoring task you want to perform.")
-    prompt = input("Prompt: ")
+    # Initialize colorama
+    init(autoreset=True)
+
+    # Colors
+    border_color = Fore.CYAN
+    text_color = Fore.YELLOW
+    prompt_color = Fore.GREEN
+
+    print(border_color + "=" * 50)
+    print(border_color + " Welcome to the Refactoring Tool ".center(50, "="))
+    print(text_color + "Please enter a prompt describing the goal you want to perform.")
+    print(border_color + "=" * 50)
+    prompt = input(prompt_color + "\nYour Prompt: ")
+    print(border_color + "=" * 50)
     return prompt
 
 
