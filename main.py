@@ -215,7 +215,8 @@ class Coordinator:
         return patches
 
     def prepare_patch_for_git(self, raw_patch):
-        patch = raw_patch.replace("\\n", "\n") + "\n"
+        # patch = raw_patch.replace("\\n", "\n") + "\n
+        patch = raw_patch
         # Normalize the repository working directory path to an absolute path without a trailing slash
         normalized_repo_path = os.path.abspath(self.repo.working_dir).rstrip('/').lstrip('/')
         escaped_repo_base_path = re.escape(normalized_repo_path)
@@ -238,10 +239,10 @@ class Coordinator:
             logger.warning(f"Patch filepaths were modified. Stripped the following from the patch file:\n{escaped_repo_base_path}")
 
         # Check if are there any changing +/- lines that have no content
-        if re.search(r"^[+-]\s+$", new_patch, flags=re.MULTILINE):
-            # strip whitespaces from these lines, keeping the + and - signs intact
-            new_patch = re.sub(r"^(\s*[+-])\s+$", r"\1", new_patch, flags=re.MULTILINE)
-            logger.warning(f"Patch had changes only in whitespace. Stripped them from the patch file.")
+        # if re.search(r"^[+-]\s+$", new_patch, flags=re.MULTILINE):
+        #     # strip whitespaces from these lines, keeping the + and - signs intact
+        #     new_patch = re.sub(r"^(\s*[+-])\s+$", r"\1", new_patch, flags=re.MULTILINE)
+        #     logger.warning(f"Patch had changes only in whitespace. Stripped them from the patch file.")
 
         # Check for hunk headers that contain line numbers and replace them with @@ ... @@ to avoid conflicts
         # e.g.: from "@@ -19,7 +18,6 @@" to "@@ -0,0 +0,0 @@"
@@ -251,7 +252,7 @@ class Coordinator:
             logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ -0,0 +0,0 @@.")
 
         # replace any sequence of \n at the end of the patch with a single \n
-        new_patch = new_patch.rstrip("\n") + "\n"
+        new_patch = new_patch.strip("\n") + "\n"
 
         # Write the modified patch to a temporary file
         with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
