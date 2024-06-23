@@ -46,7 +46,7 @@ def run(command):
     except subprocess.CalledProcessError as e:
         # Log the error with detailed information
         logger.error(f"Command '{command}' failed with return code {e.returncode}.\nStdout: {e.stdout}.\nStderr: {e.stderr}")
-        raise  # Optionally re-raise the error to handle it at a higher level
+        raise e.stderr # Optionally re-raise the error to handle it at a higher level
     except Exception as e:
         # Log any other exceptions that may occur
         logger.error(f"An unexpected error occurred while running command: {command}\nError: {str(e)}")
