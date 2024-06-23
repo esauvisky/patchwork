@@ -63,37 +63,58 @@ setup_logging("DEBUG")
 
 
 class Agent:
-    def __init__(self, system_message, name, model="gpt-4o", temperature=0.1):
+    def __init__(self, name, model="gemini-1.5-pro", temperature=0.0):
         self.name = name
-        self.system_message = system_message
+        self.system_message = constants.SYSTEM_MESSAGES[name]
         self.model = model
         self.temperature = temperature
+        self.gemini_config = {
+            "temperature": temperature,
+            "max_output_tokens": MODEL_TOKEN_LIMITS[model],
+            "response_mime_type": "application/json",
+            "response_schema": constants.AGENTS_SCHEMAS[name]
+        }
 
     def send_messages(self, messages, max_attempts=3, temperature=None):
-        response = client.chat.completions.create(model=self.model,
-                                                  messages=[{"role": "system", "content": self.system_message}] + messages,
-                                                  temperature=temperature if temperature else self.temperature,
-                                                  max_tokens=4096,
-                                                  response_format={"type": "json_object"},
-                                                  stream=True)
-        formatted_message = str(messages).replace('\\n', "\n")
-        logger.trace(f"Agent {self.name} sending messages: {formatted_message}")
+        if "gemini" in self.model:
+            model = genai.GenerativeModel(
+                model_name="gemini-1.5-pro",
+                generation_config=self.gemini_config,
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                },
+                system_instruction=self.system_message + "\n\nReturn a JSON and always escape newlines, tabs, quotes and other special characters.",
+            )
+            # print(f"{messages[-1]["role"]}: {messages[-1]['content']}")
+            history = [{"role": m["role"], "parts": m["content"]} for m in messages]
+            response = model.generate_content(history, stream=True) # type: ignore
+        else:
+            response = client.chat.completions.create(model=self.model,
+                                                    messages=[{
+                                                        "role": "system", "content": self.system_message + "\n\nReturn always a JSON."}] + messages,
+                                                    temperature=temperature if temperature else self.temperature,
+                                                    max_tokens=4096,
+                                                    response_format={"type": "json_object"},
+                                                    stream=True)
+
         output = []
         attempts = 0
         for chunk in response:
-            token = chunk.choices[0].delta.content
+            token = "".join([part.text for part in chunk.candidates[0].content.parts]).replace("\n", "\\n") if "gemini" in self.model else chunk.choices[0].delta.content
             if token is not None:
                 output.append(token)
-                sys.stdout.write(token)
-                sys.stdout.flush()
+                print(token, end="", flush=True)
             else:
                 attempts += 1
                 if attempts >= max_attempts:
                     logger.error(f"Error: Agent {self.name} did not provide a valid response after {max_attempts} attempts.")
                     break
-        sys.stdout.write("\n")
+        print("\n")
 
-        output = json.loads("".join(output))
+        output = json.loads(response.text) if "gemini" in self.model else json.loads("".join(output))
         return output
 
 
@@ -102,52 +123,81 @@ class Coordinator:
         self.coordinator_agent = coordinator_agent
         self.suggestor_agent = agents[0]
         self.editor_agent = agents[1]
+        self.checker_agent = agents[2]
         self.repo = Repo(directory_path)
 
-    def run(self, user_prompt, filepaths):
+    def run(self, user_prompt, filepaths, max_attempts=3):
         project_files = self.get_file_contents(filepaths)
         user_input = json.dumps({"files": project_files, "prompt": user_prompt})
         coordinator_output = self.coordinator_agent.send_messages([{"role": "user", "content": user_input}])
 
         goal_files = self.get_file_contents(coordinator_output['filepaths'])
-        suggestor_input = json.dumps({"files": goal_files, "goal": coordinator_output['goal'], "user_prompt": user_prompt})
+        suggestor_input = json.dumps({
+            "files": goal_files, "goal": user_prompt, "user_prompt": user_prompt})
         suggestor_output = self.suggestor_agent.send_messages([{"role": "user", "content": suggestor_input}])
 
         tasks = suggestor_output['tasks']
-        successful_patches = []
         for task in tasks:
-            patches = self.get_patches(task)
-            patches_files = [self.prepare_patch_for_git(patch) for patch in patches]
-            successful_patches += self.apply_patches(patches_files)
+            patches, changed_files = self.get_changes(task)
+            self.apply_changes(task, patches, changed_files)
 
-    def apply_patches(self, patches):
-        successful_patches = []
-        while patches:
-            patch = patches.pop(0)
-            if not self.apply_patch(patch):
-                action = self.handle_patch_failure(patch)
-                # if action == "Retry":
-                #     # TODO: try asking for a new patch
-                #     continue
-                if action == "Edit":
-                    edited_patch = self.edit_patch(patch)
-                    patches.insert(0, edited_patch) # Insert the edited patch at the beginning of the list
-                elif action == "Skip":
-                    continue
-            else:
-                successful_patches.append(patch)
-        return successful_patches
+    def replace_file(self, file, content):
+        try:
+            file_path = os.path.join(self.repo.working_dir, file)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w') as f:
+                f.write(content)
+            logger.success(f"Replaced content of file {file} successfully.")
+        except Exception as e:
+            logger.error(f"Error replacing file {file}: {e}")
 
-    def handle_patch_failure(self, patch):
-        # choices = ["Retry", "Edit", "Skip"]
-        choices = ["Edit", "Skip"]
-        questions = [{
-            'type': 'list', 'name': 'response', 'message': 'Patch application failed. Choose an action:', 'choices': choices}]
-        response = prompt(questions)
-        return response['response']
+    def apply_changes(self, task, fixed_patches, full_file_contents, skip_check=False):
+        patches = [self.prepare_patch_for_git(patch) for patch in fixed_patches]
+        if len(full_file_contents) > 0:
+            for file, content in full_file_contents.items():
+                self.replace_file(file, content)
+        if len(patches) > 0:
+            while patches:
+                patch = patches.pop(0)
+                try:
+                    self.apply_patch(patch)
+                except Exception as e:
+                    action = None
+                    def handle_patch_failure():
+                        global action
+                        choices = ["Retry", "Edit", "Skip"]
+                        questions = [{
+                            'type': 'list', 'name': 'response', 'message': 'Patch application failed. Choose an action or wait 3 seconds to auto-retry:', 'choices': choices}]
+                        response = prompt(questions)
+                        action = response['response']
+                    thread = threading.Thread(target=handle_patch_failure, daemon=True)
+                    thread.start()
+                    thread.join(3)
+                    if action == "Retry":
+                        fixed_patches, fixed_files = self.get_changes(task, error=e)
+                        self.apply_changes(task, fixed_patches, fixed_files, skip_check=True)
+                    if action == "Edit":
+                        edited_patch = self.edit_patch(patch)
+                        patches.insert(0, edited_patch) # Insert the edited patch at the beginning of the list
+                    elif action == "Skip":
+                        continue
+                else:
+                    logger.success(f"Patch applied successfully.")
+        if not skip_check:
+            self.check_task(task)
 
-    def edit_patch(self, patch):
-        # Open the temporary file in the default editor
+    def check_task(self, task):
+        content = self.get_file_contents(task["filepaths"])
+        checker_input = json.dumps({"files": content, "task": task})
+        checker_output = self.checker_agent.send_messages([{"role": "user", "content": checker_input}])
+        if checker_output.get('tasks'):
+            for new_task in checker_output['tasks']:
+                patches, changed_files = self.get_changes(new_task)
+                self.apply_changes(new_task, patches, changed_files, skip_check=True)
+        else:
+            logger.info("No new tasks from checker agent.")
+
+    def edit_patch(self, patch): # Open the temporary file in the default editor
         editors = ["subl", "subl3", "code", os.environ.get('EDITOR')]
         editor = [editor for editor in editors if os.path.exists(f"/usr/bin/{editor}" or f"/usr/local/bin/{editor}")][0]
         call([editor, "-w", patch])
@@ -186,47 +236,49 @@ class Coordinator:
         return files_dict
 
     def apply_patch(self, patch):
-        try:
-            cmd = f"git apply --recount --verbose --unidiff-zero -C0 --allow-overlap --reject --ignore-space-change --ignore-whitespace --whitespace=warn --inaccurate-eof {patch}"
-            run(cmd)
-            logger.success("Patch applied successfully.")
-        except Exception as e:
-            return False
-        return True
+        cmd = f"git apply --recount --verbose --unidiff-zero -C0 --reject --ignore-space-change --ignore-whitespace --whitespace=fix {patch}" # --inaccurate-eof
+        run(cmd)
+        logger.success("Patch applied successfully.")
 
     def handle_task_selection(self, tasks):
         tasks_descriptions = [task["prompt"] for task in tasks]
-        selected_indices = inquirer.checkbox(message="Please select the refactoring tasks you want to proceed with:", # type: ignore
-                                             choices=[{"name": desc, "value": idx}
-                                                      for idx, desc in enumerate(tasks_descriptions)]).execute()
+        selected_indices = inquirer.checkbox(
+            message="Please select the refactoring tasks you want to proceed with:", # type: ignore
+            choices=[{"name": desc, "value": idx} for idx, desc in enumerate(tasks_descriptions)]).execute()
         return [tasks[i] for i in selected_indices]
 
-    def get_patches(self, task, error=None, temperature=None):
+    def get_changes(self, task, error=None, temperature=None):
         prompt = f'{task["prompt"]}\n{task["info"]}'
         files = self.get_file_contents(task["filepaths"])
 
         if error:
-            prompt += f"\n\nThe error was: {error}. Please try again."
+            prompt += f"\n\nThere was an error while applying the this patch: {error}. Please create a new patch to retry the failed hunks. Break the patch into more hunks of smaller size, even if contexts overlap."
 
         message = json.dumps({"files": files, "prompt": prompt})
         editor_messages = [{"role": "user", "content": message}]
         editor_output = self.editor_agent.send_messages(editor_messages, temperature=temperature)
-        patches = editor_output['patches']
 
-        # further split patches at the diff hunk boundary
-        all_patches = []
-        for patch in patches:
-            splits = patch.split("diff --git")
-            if len(splits) > 1:
-                for split in splits[1:]:
-                    all_patches.append("diff --git" + split)
-            else:
-                all_patches.append(patch)
+        patches = []
+        files = []
+        if "patches" in editor_output:
+            patches = editor_output['patches']
 
-        patches = all_patches
+            # further split patches at the diff hunk boundary
+            all_patches = []
+            for patch in patches:
+                splits = patch.split("diff --git")
+                if len(splits) > 1:
+                    for split in splits[1:]:
+                        all_patches.append("diff --git" + split)
+                else:
+                    all_patches.append(patch)
 
-        logger.info(f"{len(patches)} patches for this task")
-        return patches
+            patches = all_patches
+
+        if "files" in editor_output:
+            files = editor_output['files']
+        logger.info(f"{len(patches)} patches and {len(files)} files for this task")
+        return patches, files
 
     def prepare_patch_for_git(self, raw_patch):
         # patch = raw_patch.replace("\\n", "\n") + "\n
@@ -251,6 +303,9 @@ class Coordinator:
             logger.info(f"Patch filepaths were not modified.")
         else:
             logger.warning(f"Patch filepaths were modified. Stripped the following from the patch file:\n{escaped_repo_base_path}")
+
+        # Ensure lines starting with no space have a space added before context lines
+        new_patch = re.sub(r"^([^ +-])", r" \1", new_patch, flags=re.MULTILINE)
 
         # Check if are there any changing +/- lines that have no content
         # if re.search(r"^[+-]\s+$", new_patch, flags=re.MULTILINE):
@@ -290,6 +345,8 @@ class Coordinator:
         logger.info(f"Got a patch for fixing the previous patch:\n```patch\n{patch}\n```")
         return patch
 
+        self.process_tasks(suggestor_output['tasks'], max_attempts)
+
 
 def main():
     if len(sys.argv) < 2:
@@ -320,15 +377,17 @@ def main():
     selected_files = select_user_files(file_paths) if len(sys.argv) == 2 else file_paths
     prompt = get_user_prompt()
 
-    agent_coordinator = Agent(system_message=constants.SYSTEM_MESSAGES["agent_coordinator"],
-                              name="agent_coordinator",
+    agent_coordinator = Agent(name="agent_coordinator",
                               temperature=0)
-    agent_suggestor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_suggestor"],
-                            name="agent_suggestor",
+    agent_suggestor = Agent(name="agent_suggestor",
                             temperature=0)
-    agent_editor = Agent(system_message=constants.SYSTEM_MESSAGES["agent_editor"], name="agent_editor", temperature=0)
-    coordinator = Coordinator(agent_coordinator, agents=[agent_suggestor, agent_editor], directory_path=directory_path)
+    agent_editor = Agent(name="agent_editor", temperature=0.5)
+    agent_checker = Agent(name="agent_checker",
+                          temperature=0)
 
+    coordinator = Coordinator(agent_coordinator,
+                              agents=[agent_suggestor, agent_editor, agent_checker],
+                              directory_path=directory_path)
     coordinator.run(prompt, selected_files)
 
     print("The refactoring was successful. The source code files have been updated with the patches.")
