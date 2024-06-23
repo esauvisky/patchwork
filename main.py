@@ -2,31 +2,45 @@
 from pdb import run
 from InquirerPy.resolver import prompt
 from InquirerPy import inquirer as inquirer
-from InquirerPy.validator import PathValidator
 import tempfile
 import os
 import tempfile
 from subprocess import call
-import subprocess
-import io
 import os
 import re
 from openai import OpenAI
 import json
-from unidiff import PatchSet
-from git import GitCommandError, Repo, Git
+from git import Repo
 import constants
-from utils import convert_files_dict, extract_codeblocks, get_gitignore_files, get_user_prompt, select_files, select_options, select_user_files, validate_git_repo, run
+from utils import get_gitignore_files, get_user_prompt, select_user_files, validate_git_repo, run
 
+
+import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
 from typing import List
 
 import sys
+import threading
+
 
 from loguru import logger
 import tqdm.auto as tqdm
 import sys
 
+
+# Models and their respective token limits
+MODEL_TOKEN_LIMITS = {
+    "gpt-3.5-turbo": 4192,
+    "gpt-3.5-turbo-16k": 16384,
+    "gpt-4-1106-preview": 127514,
+    "gpt-4o": 127514,
+    "gpt-4": 16384,
+    "gemini-1.5-pro": 1048576,
+    "gemini-1.5-flash": 1048576,
+}
 
 def setup_logging(level="DEBUG", show_module=False):
     """
