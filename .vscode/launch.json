@@ -12,6 +12,14 @@
             "console": "integratedTerminal",
             "cwd": "/home/emi/Coding/skrapet",
             "args": ["/home/emi/Coding/skrapet/.", "/home/emi/Coding/skrapet/database.py", "/home/emi/Coding/skrapet/utils.py", "/home/emi/Coding/skrapet/main.py", "/home/emi/Coding/skrapet/bot.py", "/home/emi/Coding/skrapet/olx.py", "/home/emi/Coding/skrapet/product.py"]
+        },
+        {
+            "name": "main.py running on itself",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": ["."]
         }
     ]
 }
