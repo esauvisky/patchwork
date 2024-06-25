@@ -59,62 +59,82 @@ def setup_logging(level="DEBUG", show_module=False):
                diagnose=True)
 
 
-setup_logging("DEBUG")
+setup_logging("TRACE")
 
 
 class Agent:
-    def __init__(self, name, model="gemini-1.5-pro", temperature=0.0):
+    # def __init__(self, name, model="gemini-1.5-pro", temperature=0.5):
+    def __init__(self, name, model="gpt-4o", temperature=0.5):
         self.name = name
         self.system_message = constants.SYSTEM_MESSAGES[name]
         self.model = model
         self.temperature = temperature
         self.gemini_config = {
-            "temperature": temperature,
-            "max_output_tokens": MODEL_TOKEN_LIMITS[model],
-            "response_mime_type": "application/json",
-            "response_schema": constants.AGENTS_SCHEMAS[name]
-        }
+            "temperature": temperature, "max_output_tokens": MODEL_TOKEN_LIMITS[model],
+            "response_mime_type": "application/json", "response_schema": constants.AGENTS_SCHEMAS[name]}
 
     def send_messages(self, messages, max_attempts=3, temperature=None):
         if "gemini" in self.model:
             model = genai.GenerativeModel(
                 model_name="gemini-1.5-pro",
-                generation_config=self.gemini_config,
+                generation_config=self.gemini_config,                                                                                                      # type: ignore
                 safety_settings={
                     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
                     HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
                     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                },
-                system_instruction=self.system_message + "\n\nReturn a JSON and always escape newlines, tabs, quotes and other special characters.",
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,},
+                system_instruction=self.system_message + "\n\nSerialize the JSON response to a string, escape newlines, tabs, and other special characters, and return it.",
             )
-            # print(f"{messages[-1]["role"]}: {messages[-1]['content']}")
             history = [{"role": m["role"], "parts": m["content"]} for m in messages]
-            response = model.generate_content(history, stream=True) # type: ignore
+            response = model.generate_content(history, stream=True)                                                                                        # type: ignore
         else:
             response = client.chat.completions.create(model=self.model,
-                                                    messages=[{
-                                                        "role": "system", "content": self.system_message + "\n\nReturn always a JSON."}] + messages,
-                                                    temperature=temperature if temperature else self.temperature,
-                                                    max_tokens=4096,
-                                                    response_format={"type": "json_object"},
-                                                    stream=True)
+                                                      messages=[{
+                                                          "role": "system", "content": self.system_message + "\n\nSerialize the JSON response to a string, escape newlines, tabs, and other special characters, and return it."}] + messages,
+                                                      temperature=temperature if temperature else self.temperature,
+                                                      max_tokens=4096,
+                                                      response_format={"type": "json_object"},
+                                                      stream=True)
 
         output = []
-        attempts = 0
         for chunk in response:
-            token = "".join([part.text for part in chunk.candidates[0].content.parts]).replace("\n", "\\n") if "gemini" in self.model else chunk.choices[0].delta.content
+            token = "".join([part.text
+                             for part in chunk.candidates[0].content.parts]).replace("\n", "\\n") if "gemini" in self.model else chunk.choices[0].delta.content # type: ignore
             if token is not None:
                 output.append(token)
                 print(token, end="", flush=True)
-            else:
-                attempts += 1
-                if attempts >= max_attempts:
-                    logger.error(f"Error: Agent {self.name} did not provide a valid response after {max_attempts} attempts.")
+                if chunk.choices[0].finish_reason == "length": # type: ignore
                     break
         print("\n")
 
-        output = json.loads(response.text) if "gemini" in self.model else json.loads("".join(output))
+        try:
+            logger.info(f"Loading JSON response from agent {self.name}'s response")
+            output = json.loads("".join(output))
+        except Exception as e:
+            logger.error(f"Error parsing JSON response from agent {self.name}: {e}")
+            if "Unterminated string" in str(e):
+                logger.error(f"Error: Agent {self.name} ran out of tokens.")
+                messages.append({"role": "assistant", "content": "".join(output)})
+                messages.append({"role": "user", "content": "Continue the previous JSON response starting exactly at the character where you left off, without codeblocks or any additional text."})
+                response = client.chat.completions.create(model=self.model,
+                                                        messages=[{
+                                                            "role": "system", "content": self.system_message},] + messages,
+                                                        temperature=0,
+                                                        max_tokens=4096,
+                                                        #   response_format={"type": "json_object"},
+                                                        stream=True)
+                for chunk in response:
+                    token = chunk.choices[0].delta.content # type: ignore
+                    if token is not None:
+                        output.append(token)
+                        print(token, end="", flush=True)
+                print("\n")
+                output = json.loads("".join(output))
+            else:
+                randtemp = random.uniform(0.5, 1.0)
+                logger.error(f"Retrying with a random temperature of {randtemp}")
+                return self.send_messages(messages, max_attempts, temperature=randtemp)
+
         return output
 
 
