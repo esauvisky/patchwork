@@ -144,22 +144,65 @@ class Coordinator:
         self.suggestor_agent = agents[0]
         self.editor_agent = agents[1]
         self.checker_agent = agents[2]
+        self.all_filepaths = []
         self.repo = Repo(directory_path)
 
-    def run(self, user_prompt, filepaths, max_attempts=3):
-        project_files = self.get_file_contents(filepaths)
+    def run(self, user_prompt, filepaths, retry_count=3):
+        project_files = self.get_files_contents(filepaths)
         user_input = json.dumps({"files": project_files, "prompt": user_prompt})
         coordinator_output = self.coordinator_agent.send_messages([{"role": "user", "content": user_input}])
+        goal = coordinator_output['goal']
+        filtered_filepaths = coordinator_output['filepaths']
+        self.all_filepaths = [os.path.abspath(file) for file in filepaths] if not self.all_filepaths else self.all_filepaths
 
-        goal_files = self.get_file_contents(coordinator_output['filepaths'])
-        suggestor_input = json.dumps({
-            "files": goal_files, "goal": user_prompt, "user_prompt": user_prompt})
-        suggestor_output = self.suggestor_agent.send_messages([{"role": "user", "content": suggestor_input}])
+        if retry_count == 0:
+            logger.critical("Tried 3 times to make tasks less broad. Giving up.")
+            sys.exit(1)
 
-        tasks = suggestor_output['tasks']
+        tasks = self.get_tasks(goal, filtered_filepaths)
         for task in tasks:
-            patches, changed_files = self.get_changes(task)
-            self.apply_changes(task, patches, changed_files)
+            try:
+                raw_patches = self.get_patches_for_task(task)
+                self.apply_changes(task, raw_patches)
+            except Exception as e:
+                if "TASK_TOO_BROAD" in str(e):
+                    logger.warning(f"Task {task['prompt']} is too broad. Trying to narrow it down.")
+                    task_files = self.get_files_contents(task['filepaths'])
+                    task_goal = task['prompt'] + "\n\n" + task['info']
+                    self.run(task_goal, task_files, retry_count-1)
+                else:
+                    raise e
+
+    def get_tasks(self, goal, filepaths):
+        goal_files = self.get_files_contents(filepaths)
+        suggestor_input = json.dumps({"files": goal_files, "goal": goal})
+        suggestor_output = self.suggestor_agent.send_messages([{"role": "user", "content": suggestor_input}])
+        return suggestor_output['tasks']
+
+    def get_patches_for_task(self, task):
+        if len(task['filepaths']) == 0 or os.path.isdir(task['filepaths'][0]):
+            logger.warning(f"No files were changed for task {task['prompt']}. Using all files.")
+            task['filepaths'] = self.all_filepaths
+
+        raw_patches = self.get_patches(task)
+
+        # Extract paths from the patch and confirm that they are within the all_filepaths list
+        for patch in raw_patches:
+            diff_hunk_pattern = re.compile(r"^(---|\+\+\+) (a/|b/)?([^\s]+)", re.MULTILINE)
+            matches = diff_hunk_pattern.findall(patch)
+            paths = set(match[2] for match in matches if match[2] != "/dev/null")
+            retry = False
+            normalized_paths = [os.path.abspath(path) for path in paths]
+
+            for path in normalized_paths:
+                if path not in self.all_filepaths and os.path.exists(path):
+                    retry = True
+                    task['filepaths'].append(path)
+                    logger.error(f"FILE_EXISTS_BUT_NOT_REFERENCED: The path {path} is not in the list of files to be changed but the file exists. Adding it to the list of files to be changed.")
+            if retry:
+                raw_patches = self.get_patches(task)
+
+        return raw_patches
 
     def replace_file(self, file, content):
         try:
@@ -171,51 +214,32 @@ class Coordinator:
         except Exception as e:
             logger.error(f"Error replacing file {file}: {e}")
 
-    def apply_changes(self, task, fixed_patches, full_file_contents, skip_check=False):
-        patches = [self.prepare_patch_for_git(patch) for patch in fixed_patches]
-        if len(full_file_contents) > 0:
-            for file, content in full_file_contents.items():
-                self.replace_file(file, content)
+    def apply_changes(self, task, patches, retry_count=2):
+        if retry_count == 0:
+            logger.critical("Tried 3 times to apply the patch. Giving up.")
+            sys.exit(1)
+
+        patches = [self.prepare_patch_for_git(patch) for patch in patches]
         if len(patches) > 0:
             while patches:
                 patch = patches.pop(0)
                 try:
                     self.apply_patch(patch)
                 except Exception as e:
-                    action = None
-                    def handle_patch_failure():
-                        global action
-                        choices = ["Retry", "Edit", "Skip"]
-                        questions = [{
-                            'type': 'list', 'name': 'response', 'message': 'Patch application failed. Choose an action or wait 3 seconds to auto-retry:', 'choices': choices}]
-                        response = prompt(questions)
-                        action = response['response']
-                    thread = threading.Thread(target=handle_patch_failure, daemon=True)
-                    thread.start()
-                    thread.join(3)
-                    if action == "Retry":
-                        fixed_patches, fixed_files = self.get_changes(task, error=e)
-                        self.apply_changes(task, fixed_patches, fixed_files, skip_check=True)
-                    if action == "Edit":
-                        edited_patch = self.edit_patch(patch)
-                        patches.insert(0, edited_patch) # Insert the edited patch at the beginning of the list
-                    elif action == "Skip":
-                        continue
+                    logger.error(f"Error when applying git patch: ${e}. Trying again...")
+                    fixed_patches = self.get_patches(task, error=e)
+                    self.apply_changes(task, fixed_patches, retry_count-1)
+                    # thread = threading.Thread(target=handle_patch_failure, daemon=True)
+                    # thread.start()
+                    # thread.join(5)
+                    # if action == "Retry" or action is None:
+                    # if action == "Edit":
+                    #     edited_patch = self.edit_patch(patch)
+                    #     patches.insert(0, edited_patch) # Insert the edited patch at the beginning of the list
+                    # elif action == "Skip":
+                    #     continue
                 else:
-                    logger.success(f"Patch applied successfully.")
-        if not skip_check:
-            self.check_task(task)
-
-    def check_task(self, task):
-        content = self.get_file_contents(task["filepaths"])
-        checker_input = json.dumps({"files": content, "task": task})
-        checker_output = self.checker_agent.send_messages([{"role": "user", "content": checker_input}])
-        if checker_output.get('tasks'):
-            for new_task in checker_output['tasks']:
-                patches, changed_files = self.get_changes(new_task)
-                self.apply_changes(new_task, patches, changed_files, skip_check=True)
-        else:
-            logger.info("No new tasks from checker agent.")
+                    logger.success(f"Patch {patch} applied successfully.")
 
     def edit_patch(self, patch): # Open the temporary file in the default editor
         editors = ["subl", "subl3", "code", os.environ.get('EDITOR')]
@@ -223,7 +247,7 @@ class Coordinator:
         call([editor, "-w", patch])
         return patch
 
-    def get_file_contents(self, file_paths):
+    def get_files_contents(self, file_paths):
         files_dict = {}
 
         for file_path in file_paths:
@@ -235,21 +259,19 @@ class Coordinator:
                 elif os.path.exists(file_path):
                     # Check if the file exists in the current directory
                     absolute_path = os.path.abspath(file_path)
-
-                relative_path = os.path.relpath(absolute_path, self.repo.working_dir)
+                os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
 
                 if not os.path.exists(absolute_path):
-                    logger.warning(f"Error: File {absolute_path} does not exist. Will create a new empty file.")
-                    with open(absolute_path, 'w') as file:
-                        file.write("")
-                        files_dict[relative_path] = ""
-                    continue
-                else:
-                    with open(absolute_path, 'r') as file:
-                        files_dict[relative_path] = file.read()
-                    logger.trace(f"Found file: {relative_path}. File size: {os.path.getsize(absolute_path)} bytes.")
+                    logger.warning(f"Error: File {absolute_path} does not exist.")
+                    with open(absolute_path, 'w') as f: f.write("")
+
+                relative_path = os.path.relpath(absolute_path, self.repo.working_dir)
+                with open(absolute_path, 'r') as file:
+                    files_dict[relative_path] = file.read()
+                logger.trace(f"Found file: {relative_path}. File size: {os.path.getsize(absolute_path)} bytes.")
             except Exception as e:
                 logger.error(f"Error reading file {file_path}: {e}")
+                raise e
 
         logger.info(f"Selected {len(file_paths)} files. Total size: {sum([os.path.getsize(file) for file in file_paths])/1024:.2f} kB.")
 
@@ -260,45 +282,51 @@ class Coordinator:
         run(cmd)
         logger.success("Patch applied successfully.")
 
-    def handle_task_selection(self, tasks):
-        tasks_descriptions = [task["prompt"] for task in tasks]
-        selected_indices = inquirer.checkbox(
-            message="Please select the refactoring tasks you want to proceed with:", # type: ignore
-            choices=[{"name": desc, "value": idx} for idx, desc in enumerate(tasks_descriptions)]).execute()
-        return [tasks[i] for i in selected_indices]
-
-    def get_changes(self, task, error=None, temperature=None):
+    def get_patches(self, task, error=None, temperature=None):
+        logger.info(f"Getting patches for task {task['prompt']}")
         prompt = f'{task["prompt"]}\n{task["info"]}'
-        files = self.get_file_contents(task["filepaths"])
+        files = self.get_files_contents(task["filepaths"])
 
         if error:
             prompt += f"\n\nThere was an error while applying the this patch: {error}. Please create a new patch to retry the failed hunks. Break the patch into more hunks of smaller size, even if contexts overlap."
 
-        message = json.dumps({"files": files, "prompt": prompt})
+        message = json.dumps({"files": files, "task": prompt})
         editor_messages = [{"role": "user", "content": message}]
         editor_output = self.editor_agent.send_messages(editor_messages, temperature=temperature)
 
-        patches = []
-        files = []
-        if "patches" in editor_output:
+        if "error" in editor_output:
+            raise Exception(editor_output["error"])
+        elif "patches" not in editor_output or len(editor_output["patches"]) == 0:
+            raise Exception("NO_PATCHES")
+        else:
             patches = editor_output['patches']
 
             # further split patches at the diff hunk boundary
             all_patches = []
             for patch in patches:
-                splits = patch.split("diff --git")
-                if len(splits) > 1:
-                    for split in splits[1:]:
-                        all_patches.append("diff --git" + split)
-                else:
-                    all_patches.append(patch)
+                # Get rid of lines like these:
+                patch = re.sub(r"^diff --git a/[^\n]+ b/[^\n]+\n", "", patch, flags=re.DOTALL)
+                patch = re.sub(r"^new file mode \d{4}\n", "", patch, flags=re.DOTALL)
+                patch = re.sub(r"^index [0-9a-f]{7,}\.\.[0-9a-f]{7,}\n", "", patch, flags=re.DOTALL)
 
-            patches = all_patches
+                # Split the patch into multiple hunks
+                splits = re.split(r"^(--- a/.*\n\+\+\+ b/.*\n)", patch, flags=re.DOTALL)
 
-        if "files" in editor_output:
-            files = editor_output['files']
-        logger.info(f"{len(patches)} patches and {len(files)} files for this task")
-        return patches, files
+                # For each hunk, create an entirely new patch fil with the header + hunk content
+                for split in splits:
+                    if len(split) > 0:
+                        patch_header = "\n".join(split.split("\n", 2)[:2])
+                        all_hunks = split.split("\n", 2)[2:]
+                        for hunk in all_hunks:
+                            parts = re.split(r'(?=^@@ )', hunk, flags=re.MULTILINE)
+                            parts = [part.strip() for part in parts if part.strip()]
+                            for part in parts:
+                                new_patch = f"{patch_header}\n{part}"
+                                all_patches.append(new_patch)
+            raw_patches = all_patches
+
+            logger.info(f"Created {len(raw_patches)} patches from {len(patches)} patches for this task.")
+            return raw_patches
 
     def prepare_patch_for_git(self, raw_patch):
         # patch = raw_patch.replace("\\n", "\n") + "\n
@@ -324,8 +352,20 @@ class Coordinator:
         else:
             logger.warning(f"Patch filepaths were modified. Stripped the following from the patch file:\n{escaped_repo_base_path}")
 
-        # Ensure lines starting with no space have a space added before context lines
-        new_patch = re.sub(r"^([^ +-])", r" \1", new_patch, flags=re.MULTILINE)
+        # Check if there are syntax errors in the patch (like no space before context lines or spaces before diff special characters)
+        # Step 1: Remove leading space if the line matches the criteria
+        match = re.search(r"^ (?=(?:[-+@]|diff --git|index ))", new_patch, flags=re.MULTILINE)
+        if match:
+            new_patch = re.sub(r"^ (?=([-+@]|diff --git|index ))", r"\1", new_patch, flags=re.MULTILINE)
+            logger.warning(f"Patch had special lines with leading spaces. Stripped them from the patch file.")
+            logger.debug(f"Match: {" ".join(match.groups())}")
+
+        # Step 2: Append a space if the line does not match the criteria
+        match = re.search(r"^(?!(?:[-+@ ]|diff --git|index |\n))(.*)$", new_patch, flags=re.MULTILINE)
+        if match:
+            logger.warning(f"Patch has context lines without leading space. Added a space to them")
+            logger.debug(f"Match: {" ".join(match.groups())}")
+            new_patch = re.sub(r"^(?!(?:[-+@ ]|diff --git|index |\n))(.*)$", r" \1", new_patch, flags=re.MULTILINE)
 
         # Check if are there any changing +/- lines that have no content
         # if re.search(r"^[+-]\s+$", new_patch, flags=re.MULTILINE):
@@ -335,10 +375,10 @@ class Coordinator:
 
         # Check for hunk headers that contain line numbers and replace them with @@ ... @@ to avoid conflicts
         # e.g.: from "@@ -19,7 +18,6 @@" to "@@ -0,0 +0,0 @@"
-        if re.search(r"^@@ [-+\d\,\s]+ @@", new_patch, flags=re.MULTILINE):
-            # strip the line numbers from the hunk headers
-            new_patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", new_patch, flags=re.MULTILINE)
-            logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ -0,0 +0,0 @@.")
+        # if re.search(r"^@@ [-+\d\,\s]+ @@", new_patch, flags=re.MULTILINE):
+        #     # strip the line numbers from the hunk headers
+        #     new_patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", new_patch, flags=re.MULTILINE)
+        #     logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ -0,0 +0,0 @@.")
 
         # replace any sequence of \n at the end of the patch with a single \n
         new_patch = new_patch.strip("\n") + "\n"
@@ -349,24 +389,6 @@ class Coordinator:
             temp_file_name = temp_file.name
 
         return temp_file_name
-
-    def get_fixed_patch(self, files_contents, patch, error):
-        user_input = files_contents + "\n\n"
-        message = f"The following patch failed to apply:\n```patch\n{patch}\n```\n\nThe error was: {error}. Please return a new patch."
-        logger.info(message)
-        user_input += message
-
-        text, codeblocks = self.editor_agent.send_messages([{"role": "user", "content": user_input}])
-
-        patch = [
-            codeblock["content"]
-            for codeblock in codeblocks
-            if codeblock["language"] == "patch" or codeblock["language"] == "diff"][0]
-        logger.info(f"Got a patch for fixing the previous patch:\n```patch\n{patch}\n```")
-        return patch
-
-        self.process_tasks(suggestor_output['tasks'], max_attempts)
-
 
 def main():
     if len(sys.argv) < 2:
