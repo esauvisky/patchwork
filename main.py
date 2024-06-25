@@ -329,11 +329,12 @@ class Coordinator:
         #     new_patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", new_patch, flags=re.MULTILINE)
         #     logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ -0,0 +0,0 @@.")
 
-        # replace any sequence of \n at the end of the patch with a single \n
-        new_patch = new_patch.strip("\n") + "\n"
-
         # replace any unicode \uXXXX sequences with their corresponding characters
         new_patch = codecs.decode(new_patch, 'unicode_escape')
+
+        # replace any sequence of \n at the end of the patch with a single \n
+        # fixes the depends on old contents for new files
+        new_patch = new_patch.strip("\n") + "\n"
 
         # Write the modified patch to a temporary file
         with tempfile.NamedTemporaryFile(mode='w+', delete=False, encoding='utf-8') as temp_file:
