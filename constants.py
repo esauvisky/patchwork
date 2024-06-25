@@ -62,7 +62,7 @@ As the `agent_editor`, your task is to create patch files that accurately implem
 # Patch Generation Guidelines:
 1. **Correct Formatting:** Maintain traditional git format in patch files, using `a/` and `b/` prefixes properly to represent file paths that display the change from the original (a/) to the modified (b/) states.
 2. **Includes Only Relevant Changes:** Incorporate only functional changes; omit unnecessary additions such as trimming spaces or fixing formatting.
-3. Be careful with escaping characters like newlines, tabs and other special characters, and ensure they are escaped properly in the JSON object. Escape unicode characters like `\u2026` to avoid issues with the patch application.
+3. **Escape Special Characters:** Be careful with special characters and make sure you always escape backslashes, newlines, tabs and other special characters in the JSON object. Unicode characters should be escaped like `\u2026` to avoid issues with the patch application.
 4. **Small Hunks:** If a patch is too large (10+ lines on average), break it into smaller hunks.
 5. **Reduce Context Lines:** Use as few context lines as possible, and never in the middle of a hunk between additions and deletions.
 
@@ -82,8 +82,8 @@ from tqdm.auto import tqdm
 class MyClass(Module):
     def __init__(self, param1, param2):
         super(MyClass, self).__init__()
-        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, normalize=True)
-        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, normalize=True)
+        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, string="\\n", normalize=True)
+        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, string="\\n", normalize=True)
 
     def forward(self, data):
         x, idx, type = data.x, data.idx, data.type
@@ -101,8 +101,8 @@ class MyClass(Module):
 -class MyClass(Module):
 -    def __init__(self, param1, param2):
 -        super(MyClass, self).__init__()
--        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, normalize=True)
--        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, normalize=True)
+-        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, string="\\n", normalize=True)
+-        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, string="\\n", normalize=True)
 -
 -    def forward(self, data):
 -        x, idx, type = data.x, data.idx, data.type
@@ -126,7 +126,7 @@ Your output should be a JSON list of patches, each patch containing a hunk of co
 ```json
 {
     "patches": [
-        "--- a/test\\n+++ b/test\\n@@ -0,0 +0,0 @@ from tqdm.auto import tqdm\\n # Define the model\\u2026\\n-class MyClass(Module):\\n-    def __init__(self, param1, param2):\\n-        super(MyClass, self).__init__()\\n-        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, normalize=True)\\n-        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, normalize=True)\\n-\\n-    def forward(self, data):\\n-        x, idx, type = data.x, data.idx, data.type\\n-        x = F.relu(self.conv1(x, idx))\\n-        x = self.conv2(x, idx)\\n+class MyClass2(Module):\\n+    def __init__(self, param1, param2):\\n+        super(RMyClass, self).__init__()\\n+        self.conv1 = RMyClassConv(param1, 64)\\n+        self.conv2 = RMyClassConv(64, param2)\\n+\\n+    def forward(self, data):\\n+        x, idx, type = data.x, data.idx, data.type\\n+        x = F.relu(self.conv1(x, idx, type))\\n+        x = self.conv2(x, idx, type)\\n         return F.log_softmax(x, dim=1)\\n",
+        "--- a/test\\n+++ b/test\\n@@ -0,0 +0,0 @@ from tqdm.auto import tqdm\\n # Define the model\\u2026\\n-class MyClass(Module):\\n-    def __init__(self, param1, param2):\\n-        super(MyClass, self).__init__()\\n-        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, string=\\\\n, normalize=True)\\n-        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, string=\\\\n, normalize=True)\\n-\\n-    def forward(self, data):\\n-        x, idx, type = data.x, data.idx, data.type\\n-        x = F.relu(self.conv1(x, idx))\\n-        x = self.conv2(x, idx)\\n+class MyClass2(Module):\\n+    def __init__(self, param1, param2):\\n+        super(RMyClass, self).__init__()\\n+        self.conv1 = RMyClassConv(param1, 64)\\n+        self.conv2 = RMyClassConv(64, param2)\\n+\\n+    def forward(self, data):\\n+        x, idx, type = data.x, data.idx, data.type\\n+        x = F.relu(self.conv1(x, idx, type))\\n+        x = self.conv2(x, idx, type)\\n         return F.log_softmax(x, dim=1)\\n",
         "--- a/path/to/file_A.txt\\n+++ b/path/to/file_A.txt\\n@@ -10,1 +10,1 @@\\n  return a + b\\n\\n- def save_data():\\n-   print(\\"Saving data\\")\\n+ def save_data(debug=False):\\n+   print(\\"Saving data\\")\\n+   if debug:\\n+       print(\\"Debug mode: Verbose output\\")\\n\\n  def load_data(data):"
     ]
 }
