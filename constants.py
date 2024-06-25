@@ -74,67 +74,28 @@ As the `agent_editor`, your task is to create patch files that accurately implem
 >
 
 # Hunk Structure Examples
-## Incorrect Approach
-```diff
---- a/path/to/my_class.py
-+++ b/path/to/my_class.py
-@@ -0,0 +0,0 @@
- from tqdm.auto import tqdm
- # Define the model
--class MyClass(Module):
-+class MyClass2(Module):
-      def __init__(self, param1, param2):
--        super(MyClass, self).__init__()
--        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, normalize=True)
--        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, normalize=True)
-+        super(RMyClass, self).__init__()
-+        self.conv1 = RMyClassConv(param1, 64)
-+        self.conv2 = RMyClassConv(64, param2)
+## Original File
+```python
+from tqdm.auto import tqdm
+# Define the model
+class MyClass(Module):
+    def __init__(self, param1, param2):
+        super(MyClass, self).__init__()
+        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, normalize=True)
+        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, normalize=True)
 
-     def forward(self, data):
-         x, idx, type = data.x, data.idx, data.type
--        x = F.relu(self.conv1(x, idx))
--        x = self.conv2(x, idx)
-+        x = F.relu(self.conv1(x, idx, type))
-+        x = self.conv2(x, idx, type)
-         return F.log_softmax(x, dim=1)
+    def forward(self, data):
+        x, idx, type = data.x, data.idx, data.type
+        x = F.relu(self.conv1(x, idx))
+        x = self.conv2(x, idx)
+        return F.log_softmax(x, dim=1)
 ```
 
-## Correct Approach
+## Patch File
 ```diff
---- a/path/to/my_class.py
-+++ b/path/to/my_class.py
-@@ -0,0 +0,0 @@
- from tqdm.auto import tqdm
- # Define the model
--class MyClass(Module):
-+class MyClass2(Module):
-      def __init__(self, param1, param2):
-@@ -0,0 +0,0 @@
- def __init__(self, param1, param2):
--        super(MyClass, self).__init__()
--        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, normalize=True)
--        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, normalize=True)
-+        super(RMyClass, self).__init__()
-+        self.conv1 = RMyClassConv(param1, 64)
-+        self.conv2 = RMyClassConv(64, param2)
-
-     def forward(self, data):
-@@ -0,0 +0,0 @@
-         x, idx, type = data.x, data.idx, data.type
--        x = F.relu(self.conv1(x, idx))
--        x = self.conv2(x, idx)
-+        x = F.relu(self.conv1(x, idx, type))
-+        x = self.conv2(x, idx, type)
-         return F.log_softmax(x, dim=1)
-```
-
-## Correct Approach (Alternate)
-```diff
---- a/path/to/my_class.py
-+++ b/path/to/my_class.py
-@@ -0,0 +0,0 @@
- from tqdm.auto import tqdm
+--- a/test
++++ b/test
+@@ -0,0 +0,0 @@ from tqdm.auto import tqdm
  # Define the model
 -class MyClass(Module):
 -    def __init__(self, param1, param2):
@@ -156,16 +117,15 @@ As the `agent_editor`, your task is to create patch files that accurately implem
 +        x, idx, type = data.x, data.idx, data.type
 +        x = F.relu(self.conv1(x, idx, type))
 +        x = self.conv2(x, idx, type)
-     return F.log_softmax(x, dim=1)
+         return F.log_softmax(x, dim=1)
 ```
 
 # Response Example
-
 Your output should be a JSON list of patches, each patch containing a hunk of code, as per the example below:
 ```json
 {
     "patches": [
-        "--- a/path/to/file_C.txt\\n+++ b/path/to/file_C.txt\\n@@ -400,4 +400,4 @@ args = data_cache.pop(data, None)\\n-        if args is None:\\n+        if args is None or not args.filters:\\n             # handle missing data error",
+        "--- a/test\\n+++ b/test\\n@@ -0,0 +0,0 @@ from tqdm.auto import tqdm\\n # Define the model\\n-class MyClass(Module):\\n-    def __init__(self, param1, param2):\\n-        super(MyClass, self).__init__()\\n-        self.conv1 = MyClassConv(param1, 64, improved=True, cached=False, normalize=True)\\n-        self.conv2 = MyClassConv(64, param2, improved=True, cached=False, normalize=True)\\n-\\n-    def forward(self, data):\\n-        x, idx, type = data.x, data.idx, data.type\\n-        x = F.relu(self.conv1(x, idx))\\n-        x = self.conv2(x, idx)\\n+class MyClass2(Module):\\n+    def __init__(self, param1, param2):\\n+        super(RMyClass, self).__init__()\\n+        self.conv1 = RMyClassConv(param1, 64)\\n+        self.conv2 = RMyClassConv(64, param2)\\n+\\n+    def forward(self, data):\\n+        x, idx, type = data.x, data.idx, data.type\\n+        x = F.relu(self.conv1(x, idx, type))\\n+        x = self.conv2(x, idx, type)\\n         return F.log_softmax(x, dim=1)\\n",
         "--- a/path/to/file_A.txt\\n+++ b/path/to/file_A.txt\\n@@ -10,1 +10,1 @@\\n  return a + b\\n\\n- def save_data():\\n-   print(\\"Saving data\\")\\n+ def save_data(debug=False):\\n+   print(\\"Saving data\\")\\n+   if debug:\\n+       print(\\"Debug mode: Verbose output\\")\\n\\n  def load_data(data):"
     ]
 }
