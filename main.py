@@ -318,7 +318,7 @@ class Coordinator:
 
         # Step 2: Append a space if the line does not match the criteria
         match = re.search(r"^(?!(?:[-+@ ]|diff --git|index |\n))(.*)$", new_patch, flags=re.MULTILINE)
-        if match:
+        if match and not re.search(r"^\s*$", match.group(1)):
             logger.warning(f"Patch has context lines without leading space. Added a space to them")
             logger.debug(f"Match: {" ".join(match.groups())}")
             new_patch = re.sub(r"^(?!(?:[-+@ ]|diff --git|index |\n))(.*)$", r" \1", new_patch, flags=re.MULTILINE)
