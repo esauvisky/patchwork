@@ -14,6 +14,7 @@ from openai import OpenAI
 import json
 from git import Repo
 import constants
+import codecs
 from utils import get_gitignore_files, get_user_prompt, select_user_files, validate_git_repo, run
 
 import google.generativeai as genai
@@ -252,7 +253,7 @@ class Coordinator:
         return files_dict
 
     def apply_patch(self, patch):
-        cmd = f"git apply --recount --verbose --unidiff-zero -C0 --reject --ignore-space-change --ignore-whitespace --whitespace=fix {patch}" # --inaccurate-eof
+        cmd = f"git apply --recount --verbose -C0 --reject {patch}" # --inaccurate-eof --unidiff-zero --ignore-space-change --ignore-whitespace --whitespace=fix
         run(cmd)
         logger.success("Patch applied successfully.")
 
@@ -331,8 +332,11 @@ class Coordinator:
         # replace any sequence of \n at the end of the patch with a single \n
         new_patch = new_patch.strip("\n") + "\n"
 
+        # replace any unicode \uXXXX sequences with their corresponding characters
+        new_patch = codecs.decode(new_patch, 'unicode_escape')
+
         # Write the modified patch to a temporary file
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False, encoding='utf-8') as temp_file:
             temp_file.write(new_patch)
             temp_file_name = temp_file.name
 
