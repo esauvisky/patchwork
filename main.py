@@ -234,6 +234,13 @@ class Coordinator:
                 elif os.path.exists(file_path):
                     # Check if the file exists in the current directory
                     absolute_path = os.path.abspath(file_path)
+                else:
+                    logger.warning(f"Error: File {file_path} does not exist.")
+                    if self.repo.working_dir in file_path:
+                        absolute_path = os.path.abspath(file_path)
+                    else:
+                        absolute_path = os.path.join(self.repo.working_dir, file_path)
+
                 os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
 
                 if not os.path.exists(absolute_path):
