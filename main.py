@@ -162,8 +162,8 @@ class Coordinator:
         tasks = self.get_tasks(goal, filtered_filepaths)
         for task in tasks:
             try:
-                raw_patches = self.get_patches_for_task(task)
-                self.apply_changes(task, raw_patches)
+                patches_filepaths = self.get_patches_filepaths(task)
+                self.apply_changes(task, patches_filepaths)
             except Exception as e:
                 if "TASK_TOO_BROAD" in str(e):
                     logger.warning(f"Task {task['prompt']} is too broad. Trying to narrow it down.")
@@ -178,31 +178,6 @@ class Coordinator:
         suggestor_input = json.dumps({"files": goal_files, "goal": goal})
         suggestor_output = self.suggestor_agent.send_messages([{"role": "user", "content": suggestor_input}])
         return suggestor_output['tasks']
-
-    def get_patches_for_task(self, task):
-        if len(task['filepaths']) == 0 or os.path.isdir(task['filepaths'][0]):
-            logger.warning(f"No files were changed for task {task['prompt']}. Using all files.")
-            task['filepaths'] = self.all_filepaths
-
-        raw_patches = self.get_patches(task)
-
-        # Extract paths from the patch and confirm that they are within the all_filepaths list
-        for patch in raw_patches:
-            diff_hunk_pattern = re.compile(r"^(---|\+\+\+) (a/|b/)?([^\s]+)", re.MULTILINE)
-            matches = diff_hunk_pattern.findall(patch)
-            paths = set(match[2] for match in matches if match[2] != "/dev/null")
-            retry = False
-            normalized_paths = [os.path.abspath(path) for path in paths]
-
-            for path in normalized_paths:
-                if path not in self.all_filepaths and os.path.exists(path):
-                    retry = True
-                    task['filepaths'].append(path)
-                    logger.error(f"FILE_EXISTS_BUT_NOT_REFERENCED: The path {path} is not in the list of files to be changed but the file exists. Adding it to the list of files to be changed.")
-            if retry:
-                raw_patches = self.get_patches(task)
-
-        return raw_patches
 
     def replace_file(self, file, content):
         try:
@@ -219,7 +194,6 @@ class Coordinator:
             logger.critical("Tried 3 times to apply the patch. Giving up.")
             sys.exit(1)
 
-        patches = [self.prepare_patch_for_git(patch) for patch in patches]
         if len(patches) > 0:
             while patches:
                 patch = patches.pop(0)
@@ -227,7 +201,7 @@ class Coordinator:
                     self.apply_patch(patch)
                 except Exception as e:
                     logger.error(f"Error when applying git patch: ${e}. Trying again...")
-                    fixed_patches = self.get_patches(task, error=e)
+                    fixed_patches = self.get_patches_filepaths(task, error=e)
                     self.apply_changes(task, fixed_patches, retry_count-1)
                     # thread = threading.Thread(target=handle_patch_failure, daemon=True)
                     # thread.start()
@@ -282,7 +256,7 @@ class Coordinator:
         run(cmd)
         logger.success("Patch applied successfully.")
 
-    def get_patches(self, task, error=None, temperature=None):
+    def get_patches_filepaths(self, task, error=None, temperature=None):
         logger.info(f"Getting patches for task {task['prompt']}")
         prompt = f'{task["prompt"]}\n{task["info"]}'
         files = self.get_files_contents(task["filepaths"])
@@ -299,34 +273,8 @@ class Coordinator:
         elif "patches" not in editor_output or len(editor_output["patches"]) == 0:
             raise Exception("NO_PATCHES")
         else:
-            patches = editor_output['patches']
-
-            # further split patches at the diff hunk boundary
-            all_patches = []
-            for patch in patches:
-                # Get rid of lines like these:
-                patch = re.sub(r"^diff --git a/[^\n]+ b/[^\n]+\n", "", patch, flags=re.DOTALL)
-                patch = re.sub(r"^new file mode \d{4}\n", "", patch, flags=re.DOTALL)
-                patch = re.sub(r"^index [0-9a-f]{7,}\.\.[0-9a-f]{7,}\n", "", patch, flags=re.DOTALL)
-
-                # Split the patch into multiple hunks
-                splits = re.split(r"^(--- a/.*\n\+\+\+ b/.*\n)", patch, flags=re.DOTALL)
-
-                # For each hunk, create an entirely new patch fil with the header + hunk content
-                for split in splits:
-                    if len(split) > 0:
-                        patch_header = "\n".join(split.split("\n", 2)[:2])
-                        all_hunks = split.split("\n", 2)[2:]
-                        for hunk in all_hunks:
-                            parts = re.split(r'(?=^@@ )', hunk, flags=re.MULTILINE)
-                            parts = [part.strip() for part in parts if part.strip()]
-                            for part in parts:
-                                new_patch = f"{patch_header}\n{part}"
-                                all_patches.append(new_patch)
-            raw_patches = all_patches
-
-            logger.info(f"Created {len(raw_patches)} patches from {len(patches)} patches for this task.")
-            return raw_patches
+            patches_paths = [self.prepare_patch_for_git(patch) for patch in editor_output['patches']]
+            return patches_paths
 
     def prepare_patch_for_git(self, raw_patch):
         # patch = raw_patch.replace("\\n", "\n") + "\n

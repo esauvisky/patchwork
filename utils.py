@@ -52,6 +52,30 @@ def run(command):
         raise e # Re-raise the exception after logging for further handling
 
 
+def split_patches_headers_and_hunks(self, patches):
+        all_patches = []
+        for patch in patches:
+                # Get rid of lines like these:
+            patch = re.sub(r"^diff --git a/[^\n]+ b/[^\n]+\n", "", patch, flags=re.DOTALL)
+            patch = re.sub(r"^new file mode \d{4}\n", "", patch, flags=re.DOTALL)
+            patch = re.sub(r"^index [0-9a-f]{7,}\.\.[0-9a-f]{7,}\n", "", patch, flags=re.DOTALL)
+
+                # Split the patch into multiple hunks
+            splits = re.split(r"^(--- a/.*\n\+\+\+ b/.*\n)", patch, flags=re.DOTALL)
+
+                # For each hunk, create an entirely new patch fil with the header + hunk content
+            for split in splits:
+                if len(split) > 0:
+                    patch_header = "\n".join(split.split("\n", 2)[:2])
+                    all_hunks = split.split("\n", 2)[2:]
+                    for hunk in all_hunks:
+                        parts = re.split(r'(?=^@@ )', hunk, flags=re.MULTILINE)
+                        parts = [part.strip() for part in parts if part.strip()]
+                        for part in parts:
+                            new_patch = f"{patch_header}\n{part}"
+                            all_patches.append(new_patch)
+        return all_patches
+
 def select_files(directory_path):
     files = os.listdir(directory_path)
     print("Select the files you want to refactor:")
