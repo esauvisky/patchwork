@@ -45,12 +45,11 @@ def run(command):
         return result.stdout, result.stderr, result.returncode
     except subprocess.CalledProcessError as e:
         # Log the error with detailed information
-        logger.error(f"Command '{command}' failed with return code {e.returncode}.\nStdout: {e.stdout}.\nStderr: {e.stderr}")
-        raise e.stderr # Optionally re-raise the error to handle it at a higher level
+        raise Exception(f"Command '{command}' failed with return code {e.returncode}.\nStdout: {e.stdout}.\nStderr: {e.stderr}") # Optionally re-raise the error to handle it at a higher level
     except Exception as e:
         # Log any other exceptions that may occur
         logger.error(f"An unexpected error occurred while running command: {command}\nError: {str(e)}")
-        raise  # Re-raise the exception after logging for further handling
+        raise e # Re-raise the exception after logging for further handling
 
 
 def select_files(directory_path):

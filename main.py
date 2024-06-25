@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from pdb import run
+import pprint
+import random
 from InquirerPy.resolver import prompt
 from InquirerPy import inquirer as inquirer
 import tempfile
