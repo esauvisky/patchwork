@@ -138,6 +138,49 @@ class Agent:
 
         return output
 
+    def _handle_truncated_response(self, messages):
+        logger.error(f"Error: Agent {self.name} ran out of tokens.")
+        messages.append({"role": "user", "content": "Your response was truncated and too long. Return the TASK_TOO_BROAD error and split the task into smaller tasks. Do not include any codeblocks or any additional text."})
+        if "gemini" in self.model:
+            model = genai.GenerativeModel(
+                model_name=self.model,
+                generation_config=self.gemini_config, # type: ignore
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,},
+                system_instruction=self.system_message,
+            )
+            history = [{"role": m["role"], "parts": m["content"]} for m in messages]
+            while True:
+                try:
+                    response = model.generate_content(history)
+                except ResourceExhausted:
+                    logger.error("Error: hit quota. Retrying in 5 seconds.")
+                    time.sleep(5)
+                    continue
+                break
+        else:
+            response = client.chat.completions.create(model=self.model,
+                                                    messages=[{
+                                                        "role": "system", "content": self.system_message},] + messages,
+                                                    temperature=0,
+                                                    max_tokens=4096,
+                                                    response_format={"type": "json_object"},
+                                                    stream=True)
+        new_output = []
+        if "gemini" in self.model:
+            new_output = [response.text] # type: ignore
+            logger.debug(f"Gemini response: {new_output}")
+        else:
+            for chunk in response:
+                token = "".join([part.text for part in chunk.candidates[0].content.parts]) if "gemini" in self.model else chunk.choices[0].delta.content # type: ignore
+                if token is not None:
+                    new_output.append(token)
+                    print(token, end="", flush=True)
+            print("\n")
+        return json.loads("".join(new_output))
 
 class Coordinator:
     def __init__(self, coordinator_agent: Agent, agents: List[Agent], directory_path: str):

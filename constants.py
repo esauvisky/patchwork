@@ -1,4 +1,5 @@
 #!/usr/bin/python
+ENABLE_TASK_TOO_BROAD_ERROR = True
 SYSTEM_MESSAGES = {}
 # SYSTEM_MESSAGES["agent_coordinator"] = f""""As the principal orchestrator, your expertise lies in directing the goal workflow across the agents `agent_suggestor` and `agent_editor`.
 # Your goal is completing the main goal given by the user. For this, you'll coordinate your assistants to perform their duties, one at a time, keeping track of their responses and handling over the course of the refactoring process.
@@ -131,7 +132,26 @@ Your output should be a JSON list of patches, each patch containing a hunk of co
     ]
 }
 ```
-"""
+""" + """
+> **Error Handling:** if you think the task is too broad or the total size of your response will be too big (i.e. bigger than ~4000 tokens), split the task into smaller tasks and return the following JSON response:
+> ```json
+> {
+>    "error": "TASK_TOO_BROAD",
+>    "tasks": [
+>        {
+>            "prompt": "Prompt for the first subtask",
+>            "info": "Additional information for the first subtask"
+>        },
+>        {
+>            "prompt": "Prompt for the second subtask",
+>            "info": "Additional information for the second subtask"
+>        },
+>        // ...
+>    ]
+> }
+> ```
+
+""" if ENABLE_TASK_TOO_BROAD_ERROR else ""
 
 SYSTEM_MESSAGES["agent_checker"] = """
 Your task is to verify whether `editor_agent` has made the necessary changes to a set of files according to the input task requirements.
@@ -223,7 +243,22 @@ AGENTS_SCHEMAS["agent_editor"] = {
         "error": {
             "type": "string",
         },
+        "tasks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string"
+                    },
+                    "info": {
+                        "type": "string"
+                    }
+                },
+                "required": ["prompt", "info"]
+            }
+        }
     },
-    "required": ["prompt", "filepaths"]
+    "required": []
 }
 AGENTS_SCHEMAS["agent_checker"] = AGENTS_SCHEMAS["agent_suggestor"]
