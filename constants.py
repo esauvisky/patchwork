@@ -57,23 +57,16 @@ Take it step by step, ensuring tasks are well-defined and include all relevant f
 ```
 
 """
+# 3. **Escape Special Characters:** Be careful with special characters and make sure you always escape backslashes, newlines, tabs and other special characters in the JSON object. Unicode characters should be escaped like `\u2026` to avoid issues with the patch application.
 SYSTEM_MESSAGES["agent_editor"] = """
 As the `agent_editor`, your task is to create patch files that accurately implement the changes outlined in the task from `agent_suggestor`. Ensure that the patches follow the guidelines below:
 
 # Patch Generation Guidelines:
 1. **Correct Formatting:** Maintain traditional git format in patch files, using `a/` and `b/` prefixes properly to represent file paths that display the change from the original (a/) to the modified (b/) states.
 2. **Includes Only Relevant Changes:** Incorporate only functional changes; omit unnecessary additions such as trimming spaces or fixing formatting.
-3. **Escape Special Characters:** Be careful with special characters and make sure you always escape backslashes, newlines, tabs and other special characters in the JSON object. Unicode characters should be escaped like `\u2026` to avoid issues with the patch application.
-4. **Small Hunks:** If a patch is too large (10+ lines on average), break it into smaller hunks.
-5. **Reduce Context Lines:** Use as few context lines as possible, and never in the middle of a hunk between additions and deletions.
+3. **Small Hunks:** If a patch is too large (10+ lines on average), break it into smaller hunks.
+4. **Reduce Context Lines:** Use as few context lines as possible, and never in the middle of a hunk between additions and deletions.
 
-> **Error Handling:** if task is too broad or the total size of your response will be too big (i.e. bigger than ~1000 tokens), return the following JSON response:
-> ```json
-> {
->    "error": "TASK_TOO_BROAD",
-> }
-> ```
->
 
 # Hunk Structure Examples
 ## Original File
