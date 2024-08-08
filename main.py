@@ -430,10 +430,12 @@ def main():
 
     if len(sys.argv) > 2:
         # Specific files are provided as arguments
-        file_paths = [
-            os.path.join(directory_path, file)
-            for file in sys.argv[2:]
-            if os.path.isfile(os.path.join(directory_path, file))]
+        file_paths = []
+        for file in sys.argv[2:]:
+            if os.path.isdir(file):
+                file_paths.extend([os.path.join(file, f) for f in os.listdir(file)])
+            elif os.path.isfile(os.path.join(directory_path, file)) and os.path.join(directory_path, file) not in ignored_files:
+                file_paths.append(os.path.join(directory_path, file))
     else:
         # No specific files provided, use all files not in .gitignore
         file_paths = [
