@@ -2,6 +2,7 @@
 from pdb import run
 import pprint
 import random
+import time
 from InquirerPy.resolver import prompt
 from InquirerPy import inquirer as inquirer
 import tempfile
@@ -9,6 +10,7 @@ import os
 import tempfile
 from subprocess import call
 import os
+from google.api_core.exceptions import ResourceExhausted
 import re
 from openai import OpenAI
 import json
@@ -37,9 +39,11 @@ MODEL_TOKEN_LIMITS = {
     "gpt-3.5-turbo": 4192,
     "gpt-3.5-turbo-16k": 16384,
     "gpt-4-1106-preview": 127514,
+    "gpt-4o-mini": 127514,
     "gpt-4o": 127514,
     "gpt-4": 16384,
     "gemini-1.5-pro": 1048576,
+    "gemini-1.5-pro-exp-0801": 2097152,
     "gemini-1.5-flash": 1048576,}
 
 
@@ -65,10 +69,11 @@ setup_logging("TRACE")
 
 class Agent:
     # def __init__(self, name, model="gemini-1.5-pro", temperature=0.5):
-    def __init__(self, name, model="gpt-4o", temperature=0.5):
+    def __init__(self, name, model="gemini-1.5-pro-exp-0801", temperature=0.5):
         self.name = name
         self.system_message = constants.SYSTEM_MESSAGES[name]
         self.model = model
+        self.message_history = []
         self.temperature = temperature
         self.gemini_config = {
             "temperature": temperature, "max_output_tokens": MODEL_TOKEN_LIMITS[model],
@@ -77,36 +82,49 @@ class Agent:
     def send_messages(self, messages, max_attempts=3, temperature=None):
         if "gemini" in self.model:
             model = genai.GenerativeModel(
-                model_name="gemini-1.5-pro",
-                generation_config=self.gemini_config,                                                                                                      # type: ignore
+                model_name=self.model,
+                generation_config=self.gemini_config, # type: ignore
                 safety_settings={
                     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
                     HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
                     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
                     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,},
-                system_instruction=self.system_message + "\n\nSerialize the JSON response to a string, escape newlines, tabs, and other special characters, and return it.",
+                system_instruction=self.system_message,
             )
             history = [{"role": m["role"], "parts": m["content"]} for m in messages]
-            response = model.generate_content(history, stream=True)                                                                                        # type: ignore
+
+            while True:
+                try:
+                    response = model.generate_content(history)
+                except ResourceExhausted:
+                    logger.error("Error: hit quota. Retrying in 5 seconds.")
+                    time.sleep(5)
+                    continue
+                break
         else:
             response = client.chat.completions.create(model=self.model,
-                                                      messages=[{
-                                                          "role": "system", "content": self.system_message + "\n\nSerialize the JSON response to a string, escape newlines, tabs, and other special characters, and return it."}] + messages,
-                                                      temperature=temperature if temperature else self.temperature,
-                                                      max_tokens=4096,
-                                                      response_format={"type": "json_object"},
-                                                      stream=True)
+                                                    messages=[{
+                                                        "role": "system", "content": self.system_message}] + messages,
+                                                    temperature=temperature if temperature else self.temperature,
+                                                    max_tokens=4096,
+                                                    response_format={"type": "json_object"},
+                                                    stream=True)
 
         output = []
-        for chunk in response:
-            token = "".join([part.text
-                             for part in chunk.candidates[0].content.parts]).replace("\n", "\\n") if "gemini" in self.model else chunk.choices[0].delta.content # type: ignore
-            if token is not None:
-                output.append(token)
-                print(token, end="", flush=True)
-                if chunk.choices[0].finish_reason == "length": # type: ignore
-                    break
-        print("\n")
+
+        if "gemini" in self.model:
+            output = [response.text] # type: ignore
+            logger.debug(f"Gemini response: {output}")
+        else:
+            for chunk in response:
+                token = "".join([part.text
+                                for part in chunk.candidates[0].content.parts]) if "gemini" in self.model else chunk.choices[0].delta.content # type: ignore
+                if token is not None:
+                    output.append(token)
+                    print(token, end="", flush=True)
+                    if chunk.choices[0].finish_reason == "length": # type: ignore
+                        break
+            print("\n")
 
         try:
             logger.info(f"Loading JSON response from agent {self.name}'s response")
@@ -114,23 +132,7 @@ class Agent:
         except Exception as e:
             logger.error(f"Error parsing JSON response from agent {self.name}: {e}")
             if "Unterminated string" in str(e):
-                logger.error(f"Error: Agent {self.name} ran out of tokens.")
-                messages.append({"role": "assistant", "content": "".join(output)})
-                messages.append({"role": "user", "content": "Continue the previous JSON response starting exactly at the character where you left off, without codeblocks or any additional text."})
-                response = client.chat.completions.create(model=self.model,
-                                                        messages=[{
-                                                            "role": "system", "content": self.system_message},] + messages,
-                                                        temperature=0,
-                                                        max_tokens=4096,
-                                                        #   response_format={"type": "json_object"},
-                                                        stream=True)
-                for chunk in response:
-                    token = chunk.choices[0].delta.content # type: ignore
-                    if token is not None:
-                        output.append(token)
-                        print(token, end="", flush=True)
-                print("\n")
-                output = json.loads("".join(output))
+                return self._handle_truncated_response(messages)
             else:
                 randtemp = random.uniform(0.5, 1.0)
                 logger.error(f"Retrying with a random temperature of {randtemp}")
@@ -191,7 +193,7 @@ class Coordinator:
         self.all_filepaths = []
         self.repo = Repo(directory_path)
 
-    def run(self, user_prompt, filepaths, retry_count=3):
+    def run(self, user_prompt, filepaths):
         project_files = self.get_files_contents(filepaths)
         user_input = json.dumps({"files": project_files, "prompt": user_prompt})
         coordinator_output = self.coordinator_agent.send_messages([{"role": "user", "content": user_input}])
@@ -199,21 +201,21 @@ class Coordinator:
         filtered_filepaths = coordinator_output['filepaths']
         self.all_filepaths = [os.path.abspath(file) for file in filepaths] if not self.all_filepaths else self.all_filepaths
 
-        if retry_count == 0:
-            logger.critical("Tried 3 times to make tasks less broad. Giving up.")
-            sys.exit(1)
-
         tasks = self.get_tasks(goal, filtered_filepaths)
+        self.process_tasks(tasks)
+
+    def process_tasks(self, tasks):
         for task in tasks:
             try:
-                patches_filepaths = self.get_patches_filepaths(task)
-                self.apply_changes(task, patches_filepaths)
+                patches = self.get_patches(task)
+                self.apply_changes(task, patches)
             except Exception as e:
                 if "TASK_TOO_BROAD" in str(e):
-                    logger.warning(f"Task {task['prompt']} is too broad. Trying to narrow it down.")
-                    task_files = self.get_files_contents(task['filepaths'])
-                    task_goal = task['prompt'] + "\n\n" + task['info']
-                    self.run(task_goal, task_files, retry_count-1)
+                    logger.warning(f"Task is too broad. Trying to narrow it down. Splitted into {len(e.args[0]["tasks"])} tasks.")
+                    subtasks = []
+                    for subtask in e.args[0]["tasks"]:
+                        subtasks.append({"prompt": subtask['prompt'], "info": subtask['info'], "filepaths": task['filepaths']})
+                    self.process_tasks(subtasks)
                 else:
                     raise e
 
@@ -236,7 +238,7 @@ class Coordinator:
     def apply_changes(self, task, patches, retry_count=2):
         if retry_count == 0:
             logger.critical("Tried 3 times to apply the patch. Giving up.")
-            sys.exit(1)
+            # sys.exit(1)
 
         if len(patches) > 0:
             while patches:
@@ -244,8 +246,15 @@ class Coordinator:
                 try:
                     self.apply_patch(patch)
                 except Exception as e:
+                    if "No such file or directory" in str(e):
+                        pattern = r"error:\s(.*?):\sNo such file or directory"
+                        filepath = re.search(pattern, str(e)).group(1)
+                        logger.error(f"Error: File {filepath} doesn't exist. Creating it and trying again.")
+                        with open(filepath, 'w') as f: f.write("")
+                        patches.insert(0, patch)
+                        continue
                     logger.error(f"Error when applying git patch: ${e}. Trying again...")
-                    fixed_patches = self.get_patches_filepaths(task, error=e)
+                    fixed_patches = self.get_patches(task, error=e)
                     self.apply_changes(task, fixed_patches, retry_count-1)
                     # thread = threading.Thread(target=handle_patch_failure, daemon=True)
                     # thread.start()
@@ -292,6 +301,7 @@ class Coordinator:
 
                 relative_path = os.path.relpath(absolute_path, self.repo.working_dir)
                 with open(absolute_path, 'r') as file:
+                    # files_dict[relative_path] = codecs.encode(file.read(), "unicode-escape").decode("utf-8")
                     files_dict[relative_path] = file.read()
                 logger.trace(f"Found file: {relative_path}. File size: {os.path.getsize(absolute_path)} bytes.")
             except Exception as e:
@@ -299,16 +309,30 @@ class Coordinator:
                 raise e
 
         logger.info(f"Selected {len(file_paths)} files. Total size: {sum([os.path.getsize(file) for file in file_paths])/1024:.2f} kB.")
-
         return files_dict
 
     def apply_patch(self, patch):
-        cmd = f"git apply --recount --verbose -C0 --reject {patch}" # --inaccurate-eof --unidiff-zero --ignore-space-change --ignore-whitespace --whitespace=fix
-        run(cmd)
-        logger.success("Patch applied successfully.")
+        try:
+            with tempfile.NamedTemporaryFile(mode='w+b', delete=False) as temp_file:
+                temp_file.write(patch.encode("utf-8"))
+                cmd = f"git apply --recount --verbose -C0 --reject {temp_file.name}"
+                run(cmd)
+                logger.success("Patch applied successfully.")
+        except:
+            with tempfile.NamedTemporaryFile(mode='w+b', delete=False) as temp_file:
+                logger.error("Error applying patch, trying to escape special characters.")
+                patch = codecs.decode(patch, "unicode-escape")
+                # # patch = patch.replace("\\", "\\\\")
+                # patch = patch.replace("\\n", "\n")
+                # patch = patch.replace("\\r", "\r")
+                # patch = patch.replace('\\"', '\"')
+                temp_file.write(patch.encode("utf-8"))
+                cmd = f"git apply --recount --verbose -C0 --reject {temp_file.name}"
+                run(cmd)
+                logger.success("Patch applied successfully.")
 
-    def get_patches_filepaths(self, task, error=None, temperature=None):
-        logger.info(f"Getting patches for task {task['prompt']}")
+    def get_patches(self, task, error=None, temperature=None):
+        logger.info(f"Task: {task['prompt']}")
         prompt = f'{task["prompt"]}\n{task["info"]}'
         files = self.get_files_contents(task["filepaths"])
 
@@ -316,16 +340,18 @@ class Coordinator:
             prompt += f"\n\nThere was an error while applying the this patch: {error}. Please create a new patch to retry the failed hunks. Break the patch into more hunks of smaller size, even if contexts overlap."
 
         message = json.dumps({"files": files, "task": prompt})
-        editor_messages = [{"role": "user", "content": message}]
+        # Append the new message to the history
+        self.editor_agent.message_history.append({"role": "user", "content": message})
+        editor_messages = self.editor_agent.message_history
         editor_output = self.editor_agent.send_messages(editor_messages, temperature=temperature)
 
         if "error" in editor_output:
-            raise Exception(editor_output["error"])
+            raise Exception(editor_output)
         elif "patches" not in editor_output or len(editor_output["patches"]) == 0:
             raise Exception("NO_PATCHES")
         else:
-            patches_paths = [self.prepare_patch_for_git(patch) for patch in editor_output['patches']]
-            return patches_paths
+            patches_contents = [self.prepare_patch_for_git(patch) for patch in editor_output['patches']]
+            return patches_contents
 
     def prepare_patch_for_git(self, raw_patch):
         # patch = raw_patch.replace("\\n", "\n") + "\n
@@ -380,18 +406,14 @@ class Coordinator:
         #     logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ -0,0 +0,0 @@.")
 
         # replace any unicode \uXXXX sequences with their corresponding characters
-        new_patch = codecs.decode(new_patch, 'unicode_escape')
+        # new_patch = codecs.decode(new_patch, "unicode-escape")
+        # codecs.escape_decode
 
         # replace any sequence of \n at the end of the patch with a single \n
         # fixes the depends on old contents for new files
         new_patch = new_patch.strip("\n") + "\n"
 
-        # Write the modified patch to a temporary file
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, encoding='utf-8') as temp_file:
-            temp_file.write(new_patch)
-            temp_file_name = temp_file.name
-
-        return temp_file_name
+        return new_patch
 
 def main():
     if len(sys.argv) < 2:
