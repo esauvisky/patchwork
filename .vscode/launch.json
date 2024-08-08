@@ -20,6 +20,15 @@
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": ["."]
+        },
+        {
+            "name": "main.py on patcher",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "cwd": "/home/emi/Pokemod/titan/apk-patcher",
+            "args": [".", "app/src/main/java/com/pokemod/patcher/signing/ApkSignerV2.kt", "app/src/main/java/com/pokemod/patcher/signing/SignApk.kt", "app/src/main/java/com/pokemod/patcher/signing/ZipUtils.kt"]
         }
     ]
 }
