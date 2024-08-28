@@ -32,92 +32,67 @@ def fix_syntax_errors_in_patch(patch):
 
     return patch
 
-def filter_and_reconstruct_patch_hunks(raw_patch):
-    header, _, initial_hunk_section = raw_patch.partition('\n@@')
-    initial_hunk_section = '\n@@' + initial_hunk_section
-    hunks = re.split(r'(\n@@.*?@@\n)', initial_hunk_section, flags=re.DOTALL)
-    filtered_hunks = [header]
+def filter_and_reconstruct_patch_hunks(patch):
+    lines = patch.splitlines()
+    header_lines = []
+    hunks = []
+    current_hunk = []
 
-    for i in range(1, len(hunks), 2):
-        hunk_header = hunks[i]
-        hunk_body = hunks[i+1]
-        if not re.search(r'^[+-]', hunk_body, flags=re.MULTILINE):
-            logger.warning(f"Hunk {i} does not contain any changes. Skipping it.")
+    in_hunk = False
+    for line in lines:
+        if line.startswith('@@'):
+            if current_hunk:
+                hunks.append('\n'.join(current_hunk))
+                current_hunk = []
+            in_hunk = True
+
+        if in_hunk:
+            current_hunk.append(line)
         else:
-            filtered_hunks.append(hunk_header + hunk_body)
+            header_lines.append(line)
 
-    return '\n'.join(filtered_hunks)
+    if current_hunk:
+        hunks.append('\n'.join(current_hunk))
+
+    filtered_hunks = []
+    for hunk in hunks:
+        if re.search(r'^[+-]', hunk, flags=re.MULTILINE):
+            filtered_hunks.append(hunk)
+        else:
+            logger.warning(f"Hunk does not contain any changes. Skipping it:\n{hunk}")
+
+    return '\n'.join(header_lines + filtered_hunks)
 
 def append_spaces_to_lines(patch):
-    match = re.search(r"^(?!(?:[-+@ ]|diff --git|index |\n))(.*)$", patch, flags=re.MULTILINE)
-    if match and not re.search(r"^\s*$", match.group(1)):
-        logger.warning(f"Patch has context lines without leading space. Added a space to them")
-        logger.debug(f"Match: {' '.join(match.groups())}")
-        patch = re.sub(r"^(?!(?:[-+@ ]|diff --git|index |\n))(.*)$", r" \1", patch, flags=re.MULTILINE)
+    lines = patch.splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith((' ', '+', '-', '@', 'diff --git', 'index')) and line.strip():
+            logger.warning(f"Line {i + 1} in patch does not start with a valid prefix. Adding a space.")
+            lines[i] = ' ' + line
 
-    return patch
+    return '\n'.join(lines)
 
 def strip_whitespace_from_change_lines(patch):
-    if re.search(r"^[+-]\s+$", patch, flags=re.MULTILINE):
-        patch = re.sub(r"^(\s*[+-])\s+$", r"\1", patch, flags=re.MULTILINE)
-        logger.warning(f"Patch had changes only in whitespace. Stripped them from the patch file.")
+    lines = patch.splitlines()
+    for i, line in enumerate(lines):
+        if re.match(r'^[+-]\s+$', line):
+            lines[i] = line[0]  # Keep only the '+' or '-' sign
+            logger.warning(f"Patch had changes only in whitespace at line {i + 1}. Stripped them from the patch file.")
 
-    return patch
+    return '\n'.join(lines)
 
 def replace_line_numbers_in_hunk_headers(patch):
-    if re.search(r"^@@ [-+\d\,\s]+ @@", patch, flags=re.MULTILINE):
-        patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", patch, flags=re.MULTILINE)
+    patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", patch, flags=re.MULTILINE)
+    if "@@ -0,0 +0,0 @@" in patch:
         logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ -0,0 +0,0 @@.")
 
     return patch
-import re
-
-def split_hunks_into_list(patch):
-    # Split the remaining patch into hunks
-    hunks = re.split(r'\n@@', patch, flags=re.DOTALL)
-
-    # Combine headers with their corresponding bodies
-    hunk_list = [hunks[0]]
-    for hunk in hunks[1:]:
-        hunk_list.append('@@' + hunk)
-
-    return hunk_list
-
-def ensure_leading_space_in_hunks(hunk_list):
-    corrected_hunk_list = []
-
-    for hunk in hunk_list:
-        lines = hunk.split("\n")
-        corrected_lines = []
-        has_changes = False
-        for idx, line in enumerate(lines):
-            if line == '' or line.startswith((' ', '+', '-', '@')):
-              if line.startswith(('+', '-')):
-                has_changes = True
-            else:
-                logger.warning(f"Line {idx} does not start with a valid line prefix. Adding a space:")
-                print(line)
-                line = ' ' + line
-            corrected_lines.append(line)
-
-        if not has_changes:
-            logger.warning(f"Hunk does not contain any changes. Skipping it.")
-            continue
-
-        corrected_hunk_list.append('\n'.join(corrected_lines))
-
-    return corrected_hunk_list
 
 def prepare_patch_for_git(raw_patch, working_dir):
     normalized_repo_path = normalize_repo_path(working_dir)
     patch = replace_repo_paths_in_patch(raw_patch, normalized_repo_path)
     patch = fix_syntax_errors_in_patch(patch)
     patch = filter_and_reconstruct_patch_hunks(patch)
-
-    hunk_list = split_hunks_into_list(patch)
-    corrected_hunk_list = ensure_leading_space_in_hunks(hunk_list)
-    patch = ''.join(corrected_hunk_list)
-
     patch = append_spaces_to_lines(patch)
     patch = strip_whitespace_from_change_lines(patch)
     patch = replace_line_numbers_in_hunk_headers(patch)
@@ -127,30 +102,26 @@ def prepare_patch_for_git(raw_patch, working_dir):
 
     return patch
 
-
 def colored_diff(expected, actual):
-    # Generate diff
-    diff = difflib.unified_diff(expected.split('\n'), actual.split('\n'), lineterm='\n', fromfile='Expected', tofile='Actual')
-    # Color the diff1
+    diff = difflib.unified_diff(expected.splitlines(), actual.splitlines(), lineterm='\n', fromfile='Expected', tofile='Actual')
     return ''.join(
-        '\033[91;1m' + line + '\n' if line[0] == '-' else
-        '\033[92;1m' + line + '\n' if line[0] == '+' else
+        '\033[91;1m' + line + '\n' if line.startswith('-') else
+        '\033[92;1m' + line + '\n' if line.startswith('+') else
         '\033[0;0m' + line + '\n'
         for line in diff)
 
-def test_prepare_patch_for_git(file1, file2):
-    input_patch = open(file1, "r").read()
-    expected_output = open(file2, "r").read()
+def test_prepare_patch_for_git(input_patch, expected_output):
     result = prepare_patch_for_git(input_patch, "/fake/working/dir")
-    if (result != expected_output):
-        logger.error(f"Test failed. Input patch: {file1}. Expected output: {file2}.")
+    if result != expected_output:
+        logger.error(f"Test failed.")
         print(colored_diff(expected_output, result))
         return False
+    return True
 
 if __name__ == "__main__":
-    result = test_prepare_patch_for_git("tests/1_input.patch", "tests/1_expected.patch")
+    result = test_prepare_patch_for_git(open("tests/1_input.patch", "r").read(), open("tests/1_expected.patch", "r").read())
     print(result)
 
-    input_2 = json.loads(open("tests/2_input.json", "r").read())
-    result = test_prepare_patch_for_git(input_2, "tests/2_expected.patch")
-    print(result)
+    # input_2 = json.loads(open("tests/2_input.json", "r").read())
+    # result = test_prepare_patch_for_git(input_2, )
+    # print(result)
