@@ -4,9 +4,11 @@ import os
 from loguru import logger
 import difflib
 
+
 def normalize_repo_path(working_dir):
     normalized_repo_path = os.path.abspath(working_dir).rstrip('/').lstrip('/')
     return normalized_repo_path
+
 
 def replace_repo_paths_in_patch(patch, normalized_repo_path):
     escaped_repo_base_path = re.escape(normalized_repo_path)
@@ -23,6 +25,7 @@ def replace_repo_paths_in_patch(patch, normalized_repo_path):
 
     return new_patch
 
+
 def fix_syntax_errors_in_patch(patch):
     match = re.search(r"^ (?=(?:[-+@]|diff --git|index ))", patch, flags=re.MULTILINE)
     if match:
@@ -32,27 +35,26 @@ def fix_syntax_errors_in_patch(patch):
 
     return patch
 
-def filter_and_reconstruct_patch_hunks(patch):
-    lines = patch.splitlines()
-    header_lines = []
+
+def filter_and_reconstruct_patch_hunks(patch, context_size=3):
+    lines = patch.split('\n')
+    patch_header = []
     hunks = []
     current_hunk = []
 
-    in_hunk = False
     for line in lines:
-        if line.startswith('@@'):
+        if line.startswith("+++") or line.startswith("---"):
+            patch_header.append(line)
+        elif line.startswith('@@'):
             if current_hunk:
-                hunks.append('\n'.join(current_hunk))
+                hunks.append(reduce_context_in_hunk(current_hunk, context_size))
                 current_hunk = []
-            in_hunk = True
-
-        if in_hunk:
-            current_hunk.append(line)
+            current_hunk = [line]
         else:
-            header_lines.append(line)
+            current_hunk.append(line)
 
     if current_hunk:
-        hunks.append('\n'.join(current_hunk))
+        hunks.append(reduce_context_in_hunk(current_hunk, context_size))
 
     filtered_hunks = []
     for hunk in hunks:
@@ -61,7 +63,24 @@ def filter_and_reconstruct_patch_hunks(patch):
         else:
             logger.warning(f"Hunk does not contain any changes. Skipping it:\n{hunk}")
 
-    return '\n'.join(header_lines + filtered_hunks)
+    return '\n'.join(patch_header + filtered_hunks)
+
+
+def reduce_context_in_hunk(hunk, context_size):
+    hunk_header = hunk[0]
+    content_lines = hunk[1:]
+
+    idx_start = next((i for i, line in enumerate(content_lines) if line.startswith(('+', '-'))), 0)
+    idx_end = next((i for i in range(len(content_lines) - 1, -1, -1) if content_lines[i].startswith(('+', '-'))),
+                   len(content_lines) - 1)
+
+    start = max(0, idx_start - context_size)
+    end = min(len(content_lines), idx_end + context_size + 1)
+
+    reduced_hunk = [hunk_header] + content_lines[start:end]
+
+    return '\n'.join(reduced_hunk)
+
 
 def append_spaces_to_lines(patch):
     lines = patch.splitlines()
@@ -72,14 +91,16 @@ def append_spaces_to_lines(patch):
 
     return '\n'.join(lines)
 
+
 def strip_whitespace_from_change_lines(patch):
     lines = patch.splitlines()
     for i, line in enumerate(lines):
         if re.match(r'^[+-]\s+$', line):
-            lines[i] = line[0]  # Keep only the '+' or '-' sign
+            lines[i] = line[0] # Keep only the '+' or '-' sign
             logger.warning(f"Patch had changes only in whitespace at line {i + 1}. Stripped them from the patch file.")
 
     return '\n'.join(lines)
+
 
 def replace_line_numbers_in_hunk_headers(patch):
     patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", patch, flags=re.MULTILINE)
@@ -88,13 +109,14 @@ def replace_line_numbers_in_hunk_headers(patch):
 
     return patch
 
+
 def prepare_patch_for_git(raw_patch, working_dir):
     normalized_repo_path = normalize_repo_path(working_dir)
     patch = replace_repo_paths_in_patch(raw_patch, normalized_repo_path)
     patch = fix_syntax_errors_in_patch(patch)
     patch = filter_and_reconstruct_patch_hunks(patch)
     patch = append_spaces_to_lines(patch)
-    patch = strip_whitespace_from_change_lines(patch)
+    # patch = strip_whitespace_from_change_lines(patch)
     patch = replace_line_numbers_in_hunk_headers(patch)
 
     # Final adjustments
@@ -102,13 +124,17 @@ def prepare_patch_for_git(raw_patch, working_dir):
 
     return patch
 
+
 def colored_diff(expected, actual):
-    diff = difflib.unified_diff(expected.splitlines(), actual.splitlines(), lineterm='\n', fromfile='Expected', tofile='Actual')
-    return ''.join(
-        '\033[91;1m' + line + '\n' if line.startswith('-') else
-        '\033[92;1m' + line + '\n' if line.startswith('+') else
-        '\033[0;0m' + line + '\n'
-        for line in diff)
+    diff = difflib.unified_diff(expected.splitlines(),
+                                actual.splitlines(),
+                                lineterm='\n',
+                                fromfile='Expected',
+                                tofile='Actual')
+    return ''.join('\033[91;1m' + line + '\n'
+                   if line.startswith('-') else '\033[92;1m' + line + '\n' if line.startswith('+') else '\033[0;0m' + line + '\n'
+                   for line in diff)
+
 
 def test_prepare_patch_for_git(input_patch, expected_output):
     result = prepare_patch_for_git(input_patch, "/fake/working/dir")
@@ -118,10 +144,13 @@ def test_prepare_patch_for_git(input_patch, expected_output):
         return False
     return True
 
+
 if __name__ == "__main__":
-    result = test_prepare_patch_for_git(open("tests/1_input.patch", "r").read(), open("tests/1_expected.patch", "r").read())
+    result = test_prepare_patch_for_git(
+        open("tests/1_input.patch", "r").read(),
+        open("tests/1_expected.patch", "r").read())
     print(result)
 
-    # input_2 = json.loads(open("tests/2_input.json", "r").read())
-    # result = test_prepare_patch_for_git(input_2, )
-    # print(result)
+    input_2 = json.loads(open("tests/2_input.json", "r").read())
+    result = prepare_patch_for_git(input_2["patch"], "/fake/working/dir")
+    open("tests/2_expected.patch", "w").write(result)

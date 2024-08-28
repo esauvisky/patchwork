@@ -1,0 +1,30 @@
+--- a/main.py
++++ b/main.py
+@@ -0,0 +0,0 @@
+ import pprint
+ import random
+ import time
++import argparse
+ from InquirerPy.resolver import prompt
+ from InquirerPy import inquirer as inquirer
+ import tempfile
+@@ -0,0 +0,0 @@
+ 
+ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
++ 
+ from typing import List
+ 
+ import sys
+@@ -0,0 +0,0 @@
+     if len(sys.argv) < 2:
+         print("Usage: script.py <directory_path> [file1 file2 ...]")
+         sys.exit(1)
++    
+     parser = argparse.ArgumentParser(description='Process some files.')
+     parser.add_argument('directory_path', type=str, help='The path to the directory.')
+     parser.add_argument('files', nargs='*', help='Specific files to process.')
++    parser.add_argument('-a', action='store_true', help='Force the agent to pass all manually inputted files for any agent on every step. This may be expensive.')
+     args = parser.parse_args()
+ 
+     directory_path = args.directory_path

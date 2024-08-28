@@ -254,7 +254,7 @@ class Coordinator:
                 except Exception as e:
                     if "No such file or directory" in str(e):
                         pattern = r"error:\s(.*?):\sNo such file or directory"
-                        filepath = re.search(pattern, str(e)).group(1)
+                        filepath = re.search(pattern, str(e)).group(1) # type: ignore
                         logger.error(f"Error: File {filepath} doesn't exist. Creating it and trying again.")
                         with open(filepath, 'w') as f:
                             f.write("")
@@ -294,7 +294,6 @@ class Coordinator:
                     # Check if the file exists in the current directory
                     absolute_path = os.path.abspath(file_path)
                 else:
-                    logger.warning(f"Error: File {file_path} does not exist.")
                     if self.repo.working_dir in file_path:
                         absolute_path = os.path.abspath(file_path)
                     else:

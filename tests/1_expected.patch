@@ -1,8 +1,6 @@
 --- a/main.py
 +++ b/main.py
 @@ -0,0 +0,0 @@
- #!/usr/bin/env python3
- from pdb import run
  import pprint
  import random
  import time
@@ -44,4 +42,3 @@
              if os.path.isdir(file):
                  file_paths.extend([os.path.join(file, f) for f in os.listdir(file)])
              elif os.path.isfile(os.path.join(directory_path, file)) and os.path.join(directory_path, file) not in ignored_files:
- export IGNOREEOF=1
