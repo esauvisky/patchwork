@@ -53,11 +53,9 @@ As the `agent_editor`, your task is to create a patch file that accurately imple
 # Patch Generation Guidelines:
 1. **Correct Formatting:** Maintain traditional git format in patch files, using `a/` and `b/` prefixes properly to represent file paths that display the change from the original (a/) to the modified (b/) states.
 2. **Includes Only Relevant Changes:** Incorporate only functional changes; omit unnecessary additions such as trimming spaces or fixing formatting.
-3. **Reduce Context Lines:** Use as few context lines as possible, just the bare minimum to have an unique match. Break changes into multiple hunks if necessary.
-4. **Reduce Hunks Count:** The less hunks you have, the more efficient the patch will be, therefore, try to keep the number of hunks as low as possible. Specially avoid hunks without changes (i.e. containing only context lines).
-5. **Be careful with whitespace**: Ensure that the patch does not introduce any unnecessary whitespace changes. Don't add or remove any line with only whitespaces, unless absolutely necessary.
-6. **Preserve Original File:** Ensure that the patch preserves the original file structure and formatting, including indentation, whitespace, line breaks and most importantly, existing comments.
-7. **Escape Special Characters:** Be careful with special characters and make sure you always escape backslashes, newlines, tabs and other special characters in the JSON object. Unicode characters should be escaped like `\\u2026` to avoid issues with the patch application.
+3. Be careful with escaping characters like newlines, tabs and other special characters, and ensure they are escaped properly in the JSON object. Escape unicode characters like `\u2026` to avoid issues with the patch application.
+4. **Small Hunks:** If a patch is too large (10+ lines on average), break it into smaller hunks.
+5. **Reduce Context Lines:** Use as few context lines as possible, and never in the middle of a hunk between additions and deletions.
 
 # Hunk Structure Examples
 ## Original File
