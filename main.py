@@ -352,7 +352,7 @@ class Coordinator:
         elif "patches" not in editor_output or len(editor_output["patches"]) == 0:
             raise Exception("NO_PATCHES")
         else:
-            patches_contents = [self.prepare_patch_for_git(patch) for patch in editor_output['patches']]
+            patches_contents = [self.prepare_patch_for_git(editor_output['patch'])]
             return patches_contents
 
     def prepare_patch_for_git(self, raw_patch):
