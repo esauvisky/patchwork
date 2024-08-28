@@ -1,0 +1,47 @@
+--- a/main.py
++++ b/main.py
+@@ -0,0 +0,0 @@
+ #!/usr/bin/env python3
+ from pdb import run
+ import pprint
+ import random
+ import time
++import argparse
+ from InquirerPy.resolver import prompt
+ from InquirerPy import inquirer as inquirer
+ import tempfile
+@@ -0,0 +0,0 @@
+ import google.generativeai as genai
+ from google.generativeai.types import HarmCategory, HarmBlockThreshold
+ 
++client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+ 
+ output = client.chat.completions.create(model=model,
+@@ -0,0 +0,0 @@
+ 
+ def main():
+-    if len(sys.argv) < 2:
+-        print("Usage: script.py <directory_path> [file1 file2 ...]")
+-        sys.exit(1)
++    parser = argparse.ArgumentParser(description="Process some files.")
++    parser.add_argument('directory_path', type=str, help='The path to the directory.')
++    parser.add_argument('file1', nargs='*', help='Optional specific files to process.')
++    parser.add_argument('-a', action='store_true', help='An optional flag.')
++    args = parser.parse_args()
+ 
+-    directory_path = sys.argv[1]
++    directory_path = args.directory_path
+     if not os.path.exists(directory_path):
+         print(f"Error: {directory_path} does not exist.")
+         sys.exit(1)
+@@ -0,0 +0,0 @@ function _c() {
+     if len(sys.argv) > 2:
+         # Specific files are provided as arguments
+         file_paths = []
+-        for file in sys.argv[2:]:
++        for file in args.file1:
+             if os.path.isdir(file):
+                 file_paths.extend([os.path.join(file, f) for f in os.listdir(file)])
+             elif os.path.isfile(os.path.join(directory_path, file)) and os.path.join(directory_path, file) not in ignored_files:
+ export IGNOREEOF=1

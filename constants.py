@@ -64,9 +64,8 @@ As the `agent_editor`, your task is to create a patch file that accurately imple
 # Patch Generation Guidelines:
 1. **Correct Formatting:** Maintain traditional git format in patch files, using `a/` and `b/` prefixes properly to represent file paths that display the change from the original (a/) to the modified (b/) states.
 2. **Includes Only Relevant Changes:** Incorporate only functional changes; omit unnecessary additions such as trimming spaces or fixing formatting.
-3. **Small Hunks:** If a patch is too large (10+ lines on average), break it into smaller hunks.
-4. **Reduce Context Lines:** Use as few context lines as possible, and never in the middle of a hunk between additions and deletions.
-
+3. **Reduce Context Lines:** Use as few context lines as possible, as long as they're enough to have an unique match.
+4. **Reduce Hunks Count:** The less hunks you have, the more efficient the patch will be, therefore, try to keep the number of hunks as low as possible. Specially avoid hunks without changes (i.e. only context lines).
 
 # Hunk Structure Examples
 ## Original File
@@ -140,6 +139,8 @@ Your output should be a JSON with the patch containing hunks of codes, as per th
 >        // ...
 >    ]
 > }
+>
+> Do not include any patch if the task is too broad.
 > ```
 
 """ if ENABLE_TASK_TOO_BROAD_ERROR else ""

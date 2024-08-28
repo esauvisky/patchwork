@@ -17,6 +17,7 @@ import json
 from git import Repo
 import constants
 import codecs
+from patch import prepare_patch_for_git
 from utils import get_gitignore_files, get_user_prompt, select_user_files, validate_git_repo, run
 
 import google.generativeai as genai
@@ -256,7 +257,7 @@ class Coordinator:
                         continue
                     logger.error(f"Error when applying git patch: ${e}. Trying again...")
                     fixed_patches = self.get_patches(task, error=e)
-                    self.apply_changes(task, fixed_patches, retry_count-1)
+                    patches.insert(0, **fixed_patches)
                     # thread = threading.Thread(target=handle_patch_failure, daemon=True)
                     # thread.start()
                     # thread.join(5)
@@ -317,7 +318,7 @@ class Coordinator:
         try:
             with tempfile.NamedTemporaryFile(mode='w+b', delete=False) as temp_file:
                 temp_file.write(patch.encode("utf-8"))
-            cmd = f"git apply --recount --verbose -C2 {temp_file.name}"
+            cmd = f"git apply --recount --verbose -C1 {temp_file.name}"
             run(cmd)
             logger.success("Patch applied successfully.")
         except:
@@ -329,7 +330,7 @@ class Coordinator:
                 # patch = patch.replace("\\r", "\r")
                 # patch = patch.replace('\\"', '\"')
                 temp_file.write(patch.encode("utf-8"))
-            cmd = f"git apply --recount --verbose -C2 {temp_file.name}"
+            cmd = f"git apply --recount --verbose -C1 {temp_file.name}"
             run(cmd)
             logger.success("Patch applied successfully.")
 
@@ -349,73 +350,11 @@ class Coordinator:
 
         if "error" in editor_output:
             raise Exception(editor_output)
-        elif "patches" not in editor_output or len(editor_output["patches"]) == 0:
+        elif "patch" not in editor_output or len(editor_output["patch"]) == 0:
             raise Exception("NO_PATCHES")
         else:
-            patches_contents = [self.prepare_patch_for_git(editor_output['patch'])]
+            patches_contents = [prepare_patch_for_git(editor_output['patch'], self.repo.working_dir)]
             return patches_contents
-
-    def prepare_patch_for_git(self, raw_patch):
-        # patch = raw_patch.replace("\\n", "\n") + "\n
-        patch = raw_patch
-        # Normalize the repository working directory path to an absolute path without a trailing slash
-        normalized_repo_path = os.path.abspath(self.repo.working_dir).rstrip('/').lstrip('/')
-        escaped_repo_base_path = re.escape(normalized_repo_path)
-
-        # new_patch = patch.replace(normalized_repo_path, "")
-        # do it with regex, replacing any occurrence of the normalized repo path with an empty string
-        new_patch = re.sub(escaped_repo_base_path + "/", "", patch, flags=re.MULTILINE)
-
-        # Handle complex cases where paths might still contain parts of the absolute path
-        normalized_repo_path_segments = normalized_repo_path.split('/')
-        for i in range(len(normalized_repo_path_segments), 0, -1):
-            partial_path = "/".join(normalized_repo_path_segments[:i])
-            escaped_partial_path = re.escape(partial_path)
-            new_patch = re.sub(rf"{escaped_partial_path}/", "", new_patch, flags=re.MULTILINE)
-
-        # Check if there were changes to the patch
-        if new_patch == patch:
-            logger.info(f"Patch filepaths were not modified.")
-        else:
-            logger.warning(f"Patch filepaths were modified. Stripped the following from the patch file:\n{escaped_repo_base_path}")
-
-        # Check if there are syntax errors in the patch (like no space before context lines or spaces before diff special characters)
-        # Step 1: Remove leading space if the line matches the criteria
-        match = re.search(r"^ (?=(?:[-+@]|diff --git|index ))", new_patch, flags=re.MULTILINE)
-        if match:
-            new_patch = re.sub(r"^ (?=([-+@]|diff --git|index ))", r"\1", new_patch, flags=re.MULTILINE)
-            logger.warning(f"Patch had special lines with leading spaces. Stripped them from the patch file.")
-            logger.debug(f"Match: {" ".join(match.groups())}")
-
-        # Step 2: Append a space if the line does not match the criteria
-        match = re.search(r"^(?!(?:[-+@ ]|diff --git|index |\n))(.*)$", new_patch, flags=re.MULTILINE)
-        if match and not re.search(r"^\s*$", match.group(1)):
-            logger.warning(f"Patch has context lines without leading space. Added a space to them")
-            logger.debug(f"Match: {" ".join(match.groups())}")
-            new_patch = re.sub(r"^(?!(?:[-+@ ]|diff --git|index |\n))(.*)$", r" \1", new_patch, flags=re.MULTILINE)
-
-        # Check if are there any changing +/- lines that have no content
-        # if re.search(r"^[+-]\s+$", new_patch, flags=re.MULTILINE):
-        #     # strip whitespaces from these lines, keeping the + and - signs intact
-        #     new_patch = re.sub(r"^(\s*[+-])\s+$", r"\1", new_patch, flags=re.MULTILINE)
-        #     logger.warning(f"Patch had changes only in whitespace. Stripped them from the patch file.")
-
-        # Check for hunk headers that contain line numbers and replace them with @@ ... @@ to avoid conflicts
-        # e.g.: from "@@ -19,7 +18,6 @@" to "@@ -0,0 +0,0 @@"
-        # if re.search(r"^@@ [-+\d\,\s]+ @@", new_patch, flags=re.MULTILINE):
-        #     # strip the line numbers from the hunk headers
-        #     new_patch = re.sub(r"^@@ [-+\d\,\s]+ @@", r"@@ -0,0 +0,0 @@", new_patch, flags=re.MULTILINE)
-        #     logger.warning(f"Patch had hunk headers with line numbers. Replaced them with @@ -0,0 +0,0 @@.")
-
-        # replace any unicode \uXXXX sequences with their corresponding characters
-        # new_patch = codecs.decode(new_patch, "unicode-escape")
-        # codecs.escape_decode
-
-        # replace any sequence of \n at the end of the patch with a single \n
-        # fixes the depends on old contents for new files
-        new_patch = new_patch.strip("\n") + "\n"
-
-        return new_patch
 
 def main():
     if len(sys.argv) < 2:
