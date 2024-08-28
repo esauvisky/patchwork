@@ -39,7 +39,7 @@ def run(command):
     """
     try:
         # Execute the command and wait for it to finish, capturing stdout and stderr
-        result = subprocess.run(command, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        result = subprocess.run(shlex.split(command), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         # Log the successful execution and its output
         logger.debug(f"Command executed successfully: {command}\nOutput: {result.stdout}")
         return result.stdout, result.stderr, result.returncode

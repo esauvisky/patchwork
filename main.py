@@ -250,7 +250,8 @@ class Coordinator:
                         pattern = r"error:\s(.*?):\sNo such file or directory"
                         filepath = re.search(pattern, str(e)).group(1)
                         logger.error(f"Error: File {filepath} doesn't exist. Creating it and trying again.")
-                        with open(filepath, 'w') as f: f.write("")
+                        with open(filepath, 'w') as f:
+                            f.write("")
                         patches.insert(0, patch)
                         continue
                     logger.error(f"Error when applying git patch: ${e}. Trying again...")
@@ -297,7 +298,8 @@ class Coordinator:
 
                 if not os.path.exists(absolute_path):
                     logger.warning(f"Error: File {absolute_path} does not exist.")
-                    with open(absolute_path, 'w') as f: f.write("")
+                    with open(absolute_path, 'w') as f:
+                        f.write("")
 
                 relative_path = os.path.relpath(absolute_path, self.repo.working_dir)
                 with open(absolute_path, 'r') as file:
@@ -315,21 +317,21 @@ class Coordinator:
         try:
             with tempfile.NamedTemporaryFile(mode='w+b', delete=False) as temp_file:
                 temp_file.write(patch.encode("utf-8"))
-                cmd = f"git apply --recount --verbose -C0 --reject {temp_file.name}"
-                run(cmd)
-                logger.success("Patch applied successfully.")
+            cmd = f"git apply --recount --verbose -C2 {temp_file.name}"
+            run(cmd)
+            logger.success("Patch applied successfully.")
         except:
+            logger.error("Error applying patch, trying to escape special characters.")
             with tempfile.NamedTemporaryFile(mode='w+b', delete=False) as temp_file:
-                logger.error("Error applying patch, trying to escape special characters.")
                 patch = codecs.decode(patch, "unicode-escape")
                 # # patch = patch.replace("\\", "\\\\")
                 # patch = patch.replace("\\n", "\n")
                 # patch = patch.replace("\\r", "\r")
                 # patch = patch.replace('\\"', '\"')
                 temp_file.write(patch.encode("utf-8"))
-                cmd = f"git apply --recount --verbose -C0 --reject {temp_file.name}"
-                run(cmd)
-                logger.success("Patch applied successfully.")
+            cmd = f"git apply --recount --verbose -C2 {temp_file.name}"
+            run(cmd)
+            logger.success("Patch applied successfully.")
 
     def get_patches(self, task, error=None, temperature=None):
         logger.info(f"Task: {task['prompt']}")
@@ -337,7 +339,7 @@ class Coordinator:
         files = self.get_files_contents(task["filepaths"])
 
         if error:
-            prompt += f"\n\nThere was an error while applying the this patch: {error}. Please create a new patch to retry the failed hunks. Break the patch into more hunks of smaller size, even if contexts overlap."
+            prompt += f"\n\nThere was an error while applying this patch: {error}. Please create a new patch to retry the failed hunks. Break the patch into more hunks of smaller size, even if contexts overlap."
 
         message = json.dumps({"files": files, "task": prompt})
         # Append the new message to the history
