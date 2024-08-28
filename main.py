@@ -81,6 +81,9 @@ class Agent:
             "response_mime_type": "application/json", "response_schema": constants.AGENTS_SCHEMAS[name]}
 
     def send_messages(self, messages, max_attempts=3, temperature=None):
+        logger.debug(f"Agent {self.name} messages:")
+        print(messages[0][list(messages[0].keys())[-1]])
+
         if "gemini" in self.model:
             model = genai.GenerativeModel(
                 model_name=self.model,
@@ -122,10 +125,10 @@ class Agent:
                                 for part in chunk.candidates[0].content.parts]) if "gemini" in self.model else chunk.choices[0].delta.content # type: ignore
                 if token is not None:
                     output.append(token)
-                    print(token, end="", flush=True)
+                    # print(token, end="", flush=True)
                     if chunk.choices[0].finish_reason == "length": # type: ignore
                         break
-            print("\r" + " " * len(output), end="\r")
+            # print("\r" + " " * len(output), end="\r")
 
         try:
             logger.info(f"Loading JSON response from agent {self.name}'s response")
@@ -139,10 +142,8 @@ class Agent:
                 logger.error(f"Retrying with a random temperature of {randtemp}")
                 return self.send_messages(messages, max_attempts, temperature=randtemp)
 
-        logger.debug(f"Agent {self.name} messages:")
-        print(pprint.pformat(messages, indent=2, compact=True, underscore_numbers=True, width=100))
         logger.debug(f"Agent {self.name} response:")
-        print(pprint.pformat(output, indent=2, compact=True, underscore_numbers=True, width=100))
+        print(output[list(output.keys())[-1]])
         return output
 
     def _handle_truncated_response(self, messages):
