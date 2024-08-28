@@ -391,10 +391,10 @@ def main():
     selected_files = select_user_files(file_paths) if len(sys.argv) == 2 else file_paths
     prompt = get_user_prompt()
 
-    agent_coordinator = Agent(name="agent_coordinator", model="gpt-4o-mini", temperature=0.5)
-    agent_suggestor = Agent(name="agent_suggestor", model="gpt-4o-mini", temperature=0.5)
-    agent_editor = Agent(name="agent_editor", model="gpt-4o", temperature=0)
-    agent_checker = Agent(name="agent_checker", model="gpt-4o-mini", temperature=0)
+    agent_coordinator = Agent(name="agent_coordinator", model="gpt-4o-mini", temperature=1)
+    agent_suggestor = Agent(name="agent_suggestor", model="gpt-4o-mini", temperature=1)
+    agent_editor = Agent(name="agent_editor", model="gpt-4o-mini", temperature=1)
+    agent_checker = Agent(name="agent_checker", model="gpt-4o-mini", temperature=1)
 
     coordinator = Coordinator(agent_coordinator,
                               agents=[agent_suggestor, agent_editor, agent_checker],
