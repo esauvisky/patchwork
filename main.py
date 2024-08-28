@@ -361,9 +361,12 @@ class Coordinator:
             return patches_contents
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: script.py <directory_path> [file1 file2 ...]")
-        sys.exit(1)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Process directory and file paths.")
+    parser.add_argument("directory_path", type=str, help="The directory path.")
+    parser.add_argument("files", nargs="*", help="Specific files to include.")
+    args = parser.parse_args()
 
     directory_path = sys.argv[1]
     if not os.path.exists(directory_path):
@@ -376,7 +379,7 @@ def main():
     if len(sys.argv) > 2:
         # Specific files are provided as arguments
         file_paths = []
-        for file in sys.argv[2:]:
+        for file in args.files:
             if os.path.isdir(file):
                 file_paths.extend([os.path.join(file, f) for f in os.listdir(file)])
             elif os.path.isfile(os.path.join(directory_path, file)) and os.path.join(directory_path, file) not in ignored_files:
