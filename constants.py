@@ -131,9 +131,9 @@ Your output should be a JSON with the patch containing hunks of codes, as per th
 >        // ...
 >    ]
 > }
+> ```
 >
 > Do not include any patch if the task is too broad.
-> ```
 
 """ if ENABLE_TASK_TOO_BROAD_ERROR else ""
 
@@ -168,8 +168,7 @@ Your output should be a JSON list of tasks, each task containing a prompt and a 
         }
     ]
 }
-```
-"""
+```"""
 
 AGENTS_SCHEMAS = {}
 AGENTS_SCHEMAS["agent_coordinator"] = {
