@@ -1,4 +1,5 @@
 
+import json
 import os
 import re
 from loguru import logger
@@ -149,4 +150,8 @@ def test_prepare_patch_for_git(file1, file2):
 
 if __name__ == "__main__":
     result = test_prepare_patch_for_git("tests/1_input.patch", "tests/1_expected.patch")
+    print(result)
+
+    input_2 = json.loads(open("tests/2_input.json", "r").read())
+    result = test_prepare_patch_for_git(input_2, "tests/2_expected.patch")
     print(result)

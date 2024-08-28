@@ -18,7 +18,7 @@ from git import Repo
 import constants
 import codecs
 from patch import prepare_patch_for_git
-from utils import get_gitignore_files, get_user_prompt, select_user_files, validate_git_repo, run
+from utils import generate_markdown, get_gitignore_files, get_user_prompt, select_user_files, validate_git_repo, run
 
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
@@ -125,7 +125,7 @@ class Agent:
                     print(token, end="", flush=True)
                     if chunk.choices[0].finish_reason == "length": # type: ignore
                         break
-            print("\n")
+            print("\r" + " " * len(output), end="\r")
 
         try:
             logger.info(f"Loading JSON response from agent {self.name}'s response")
@@ -139,6 +139,10 @@ class Agent:
                 logger.error(f"Retrying with a random temperature of {randtemp}")
                 return self.send_messages(messages, max_attempts, temperature=randtemp)
 
+        logger.debug(f"Agent {self.name} messages:")
+        print(pprint.pformat(messages, indent=2, compact=True, underscore_numbers=True, width=100))
+        logger.debug(f"Agent {self.name} response:")
+        print(pprint.pformat(output, indent=2, compact=True, underscore_numbers=True, width=100))
         return output
 
     def _handle_truncated_response(self, messages):
@@ -196,7 +200,7 @@ class Coordinator:
 
     def run(self, user_prompt, filepaths):
         project_files = self.get_files_contents(filepaths)
-        user_input = json.dumps({"files": project_files, "prompt": user_prompt})
+        user_input = generate_markdown(project_files, user_prompt)
         coordinator_output = self.coordinator_agent.send_messages([{"role": "user", "content": user_input}])
         goal = coordinator_output['goal']
         filtered_filepaths = coordinator_output['filepaths']
@@ -222,7 +226,7 @@ class Coordinator:
 
     def get_tasks(self, goal, filepaths):
         goal_files = self.get_files_contents(filepaths)
-        suggestor_input = json.dumps({"files": goal_files, "goal": goal})
+        suggestor_input = generate_markdown(goal_files, goal)
         suggestor_output = self.suggestor_agent.send_messages([{"role": "user", "content": suggestor_input}])
         return suggestor_output['tasks']
 
@@ -257,7 +261,7 @@ class Coordinator:
                         continue
                     logger.error(f"Error when applying git patch: ${e}. Trying again...")
                     fixed_patches = self.get_patches(task, error=e)
-                    patches.insert(0, **fixed_patches)
+                    patches.insert(0, fixed_patches[0])
                     # thread = threading.Thread(target=handle_patch_failure, daemon=True)
                     # thread.start()
                     # thread.join(5)
@@ -342,13 +346,12 @@ class Coordinator:
         if error:
             prompt += f"\n\nThere was an error while applying this patch: {error}. Please create a new patch to retry the failed hunks. Break the patch into more hunks of smaller size, even if contexts overlap."
 
-        message = json.dumps({"files": files, "task": prompt})
+        message = generate_markdown(files, prompt)
         # Append the new message to the history
-        self.editor_agent.message_history.append({"role": "user", "content": message})
-        editor_messages = self.editor_agent.message_history
+        editor_messages = [{"role": "user", "content": message}]
         editor_output = self.editor_agent.send_messages(editor_messages, temperature=temperature)
 
-        if "error" in editor_output:
+        if "error" in editor_output and editor_output["error"]:
             raise Exception(editor_output)
         elif "patch" not in editor_output or len(editor_output["patch"]) == 0:
             raise Exception("NO_PATCHES")
@@ -387,9 +390,9 @@ def main():
     selected_files = select_user_files(file_paths) if len(sys.argv) == 2 else file_paths
     prompt = get_user_prompt()
 
-    agent_coordinator = Agent(name="agent_coordinator", model="gpt-4o", temperature=1)
-    agent_suggestor = Agent(name="agent_suggestor", model="gpt-4o", temperature=0.5)
-    agent_editor = Agent(name="agent_editor", model="gpt-4o-mini", temperature=0)
+    agent_coordinator = Agent(name="agent_coordinator", model="gpt-4o-mini", temperature=0.5)
+    agent_suggestor = Agent(name="agent_suggestor", model="gpt-4o-mini", temperature=0.5)
+    agent_editor = Agent(name="agent_editor", model="gpt-4o", temperature=0)
     agent_checker = Agent(name="agent_checker", model="gpt-4o-mini", temperature=0)
 
     coordinator = Coordinator(agent_coordinator,

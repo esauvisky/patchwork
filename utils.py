@@ -22,6 +22,29 @@ def validate_git_repo(path):
         print(f"Error: {path} is not a valid Git repository.")
         sys.exit(1)
 
+def generate_markdown(files_contents, user_prompt):
+    """
+    Generates a Markdown file from the given files_contents and user_prompt.
+
+    Args:
+        files_contents (dict of dict): An dictionaries containing filenames and their raw contents.
+        user_prompt (str): The user prompt to include in the Markdown file.
+
+    Returns:
+        str: The generated Markdown content as a string.
+    """
+    markdown_output = "# Files\n"
+
+    for filename, content in files_contents.items():
+        markdown_output += f"## {filename}\n"
+        markdown_output += "```\n"
+        markdown_output += f"{content}\n"
+        markdown_output += "```\n\n"
+
+    markdown_output += "# Prompt\n"
+    markdown_output += f"```\n{user_prompt}\n```\n"
+
+    return markdown_output
 
 def run(command):
     """
@@ -45,7 +68,7 @@ def run(command):
         return result.stdout, result.stderr, result.returncode
     except subprocess.CalledProcessError as e:
         # Log the error with detailed information
-        raise Exception(f"Command '{command}' failed with return code {e.returncode}.\nStdout: {e.stdout}.\nStderr: {e.stderr}") # Optionally re-raise the error to handle it at a higher level
+        raise Exception(f"Command '{command}' failed with return code {e.returncode}.\nStdout: {e.stdout.decode('utf-8')}.\nStderr: {e.stderr.decode('utf-8')}") # Optionally re-raise the error to handle it at a higher level
     except Exception as e:
         # Log any other exceptions that may occur
         logger.error(f"An unexpected error occurred while running command: {command}\nError: {str(e)}")

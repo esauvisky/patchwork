@@ -64,8 +64,10 @@ As the `agent_editor`, your task is to create a patch file that accurately imple
 # Patch Generation Guidelines:
 1. **Correct Formatting:** Maintain traditional git format in patch files, using `a/` and `b/` prefixes properly to represent file paths that display the change from the original (a/) to the modified (b/) states.
 2. **Includes Only Relevant Changes:** Incorporate only functional changes; omit unnecessary additions such as trimming spaces or fixing formatting.
-3. **Reduce Context Lines:** Use as few context lines as possible, as long as they're enough to have an unique match.
-4. **Reduce Hunks Count:** The less hunks you have, the more efficient the patch will be, therefore, try to keep the number of hunks as low as possible. Specially avoid hunks without changes (i.e. only context lines).
+3. **Reduce Context Lines:** Use as few context lines as possible, just the bare minimum to have an unique match. Break changes into multiple hunks if necessary.
+4. **Reduce Hunks Count:** The less hunks you have, the more efficient the patch will be, therefore, try to keep the number of hunks as low as possible. Specially avoid hunks without changes (i.e. containing only context lines).
+5. **Be careful with whitespace**: Ensure that the patch does not introduce any unnecessary whitespace changes. Don't add or remove any line with only whitespaces, unless absolutely necessary.
+6. **Preserve Original File:** Ensure that the patch preserves the original file structure and formatting, including indentation, whitespace, line breaks and most importantly, existing comments.
 
 # Hunk Structure Examples
 ## Original File
